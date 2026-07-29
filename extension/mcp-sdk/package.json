@@ -1,0 +1,35 @@
+{
+  "name": "universal-mcp-sdk",
+  "version": "1.0.0",
+  "description": "Cross-agent MCP Server SDK — works with Claude Code, Cursor, Mavis, and any HTTP-based AI agent via stdio or streamable-http transport",
+  "main": "index.js",
+  "type": "commonjs",
+  "author": "付饶",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HappyLifeOk/universal-mcp-sdk.git"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "index.js",
+    "tool.js",
+    "resource.js",
+    "protocol/",
+    "transport/",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node index.js",
+    "start:stdio": "node index.js --stdio",
+    "start:http": "node index.js --http",
+    "dev": "node index.js --stdio --dev"
+  },
+  "keywords": ["mcp", "model-context-protocol", "claude-code", "cursor", "mavis", "ai-agent", "stdio", "streamable-http"],
+  "peerDependencies": {},
+  "devDependencies": {}
+}

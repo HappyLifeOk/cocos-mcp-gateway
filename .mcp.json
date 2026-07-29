@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cocos": {
+      "command": "node",
+      "args": ["./runtime/router/bin.js"],
+      "cwd": "."
+    }
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cocos MCP Control"
+  short_description: "连接、选择并控制当前工作区的 Cocos Creator 项目"
+  default_prompt: "连接当前 Cocos 项目，检查编辑器状态并按正确链路执行任务。"
