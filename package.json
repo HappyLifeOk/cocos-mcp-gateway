@@ -1,0 +1,24 @@
+{
+  "name": "cocos-mcp",
+  "version": "0.2.0",
+  "description": "Global MCP router and offline Prefab CLI for Cocos Creator projects.",
+  "license": "Apache-2.0",
+  "author": "付饶",
+  "repository": {
+    "type": "git",
+    "url": "https://gitee.com/Fu_Rao/cocos-mcp.git"
+  },
+  "bin": {
+    "cocos-mcp-router": "./router/bin.js",
+    "cocos-mcp-cli": "./cli/bin/cocos-mcp-cli.js",
+    "cocos-mcp-connect": "./scripts/connect-project.js",
+    "cocos-mcp-setup-claude": "./scripts/setup-claude.js"
+  },
+  "scripts": {
+    "test": "node --test cli/test/classid-resolver.test.js cli/test/id.test.js cli/test/primitives.test.js router/test/editor-control.test.js",
+    "test:fixture": "node --test cli/test/api.test.js cli/test/cli.test.js cli/test/query.test.js cli/test/smoke.test.js router/test/offline-tools.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
