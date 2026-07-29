@@ -3,24 +3,20 @@
 
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { writeClientRegistry } = require('./client-registry');
 
 const dryRun = process.argv.includes('--dry-run');
 const root = path.resolve(__dirname, '..');
-writeClientRegistry(root);
-const router = path.join(root, 'router', 'bin.js');
+const router = path.join(root, 'runtime', 'router', 'bin.js');
 const claude = process.platform === 'win32' ? 'claude.cmd' : 'claude';
-
-function print(commandArgs) {
-  process.stdout.write(
-    [claude, ...commandArgs].map(value =>
-      /\s/.test(value) ? JSON.stringify(value) : value
-    ).join(' ') + '\n'
-  );
-}
 
 const removeArgs = ['mcp', 'remove', 'cocos', '--scope', 'user'];
 const addArgs = ['mcp', 'add', '--scope', 'user', 'cocos', '--', 'node', router];
+
+function print(args) {
+  process.stdout.write(
+    [claude, ...args].map(value => /\s/.test(value) ? JSON.stringify(value) : value).join(' ') + '\n'
+  );
+}
 
 if (dryRun) {
   print(removeArgs);
