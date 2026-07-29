@@ -3,9 +3,11 @@
 
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { writeClientRegistry } = require('./client-registry');
 
 const dryRun = process.argv.includes('--dry-run');
 const root = path.resolve(__dirname, '..');
+writeClientRegistry(root);
 const router = path.join(root, 'router', 'bin.js');
 const claude = process.platform === 'win32' ? 'claude.cmd' : 'claude';
 

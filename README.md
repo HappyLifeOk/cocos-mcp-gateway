@@ -20,6 +20,7 @@ router、离线 Prefab CLI 与项目接入工具。
 git clone https://gitee.com/Fu_Rao/cocos-mcp.git
 cd cocos-mcp
 npm link
+cocos-mcp-register
 ```
 
 安装后提供：
@@ -28,6 +29,7 @@ npm link
 cocos-mcp-router
 cocos-mcp-cli
 cocos-mcp-connect
+cocos-mcp-register
 cocos-mcp-setup-claude
 ```
 
@@ -43,6 +45,10 @@ cocos-mcp-setup-claude
 ```
 
 脚本运行时解析当前安装位置，只把本机绝对路径写入 Claude 用户配置，不会修改仓库文件。
+
+`cocos-mcp-register`、`cocos-mcp-connect` 和 `cocos-mcp-setup-claude` 会把当前
+安装根登记到 `~/.cocos-mcp/client.json`。Cocos GUI 进程可通过该登记定位全局
+CLI，不依赖项目路径或终端的 `PATH`。
 
 ## 接入 Cocos 项目
 

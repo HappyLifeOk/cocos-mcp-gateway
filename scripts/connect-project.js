@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { writeClientRegistry } = require('./client-registry');
 
 const DEFAULT_REPO = 'https://gitee.com/Fu_Rao/cocos-mcp-extension.git';
 
@@ -47,6 +48,7 @@ function runGit(args, cwd, dryRun) {
 }
 
 const options = parseArgs(process.argv.slice(2));
+writeClientRegistry(path.resolve(__dirname, '..'));
 if (!options.project) {
   fail('用法: cocos-mcp-connect <Cocos 项目根目录> [--mode submodule|clone] [--branch main] [--repo URL] [--dry-run]');
 }

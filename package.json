@@ -1,6 +1,6 @@
 {
   "name": "cocos-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Global MCP router and offline Prefab CLI for Cocos Creator projects.",
   "license": "Apache-2.0",
   "author": "付饶",
@@ -12,6 +12,7 @@
     "cocos-mcp-router": "./router/bin.js",
     "cocos-mcp-cli": "./cli/bin/cocos-mcp-cli.js",
     "cocos-mcp-connect": "./scripts/connect-project.js",
+    "cocos-mcp-register": "./scripts/register-client.js",
     "cocos-mcp-setup-claude": "./scripts/setup-claude.js"
   },
   "scripts": {
