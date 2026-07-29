@@ -2,8 +2,7 @@
   "mcpServers": {
     "cocos": {
       "command": "node",
-      "args": ["./runtime/router/bin.js"],
-      "cwd": "."
+      "args": ["/Users/jeff/Documents/work/cocos-mcp/runtime/router/bin.js"]
     }
   }
 }
