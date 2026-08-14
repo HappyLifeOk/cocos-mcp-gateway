@@ -174,6 +174,7 @@ exports.methods = {
     async getMcpConfig() {
         if (!_mcpServer) return { running: false };
         var url = 'http://' + _mcpServer.host + ':' + _mcpServer.port + '/mcp';
+        var authorization = 'Bearer ' + _mcpServer.authToken;
         return {
             running: _mcpServer.started,
             url: url,
@@ -183,11 +184,20 @@ exports.methods = {
             resourceCount: _mcpServer.resourceCount,
             stats: _mcpServer.stats,
             // Claude Code 的 mcp add 命令
-            cliAddCommand: 'claude mcp add cocos --transport http ' + url,
+            cliAddCommand: 'claude mcp add --transport http cocos ' + url + ' --header "Authorization: ' + authorization + '"',
+            connectionConfig: {
+                transport: 'http',
+                url: url,
+                headers: { Authorization: authorization },
+            },
             // JSON 配置片段
             jsonConfig: {
                 mcpServers: {
-                    cocos: { transport: 'http', url: url },
+                    cocos: {
+                        transport: 'http',
+                        url: url,
+                        headers: { Authorization: authorization },
+                    },
                 },
             },
         };
@@ -339,6 +349,8 @@ exports.methods = {
 
 var _mcpServer = null;
 var MCP_DEFAULT_PORT = 7523;
+var MCP_GATEWAY_API_VERSION = 1;
+var MCP_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26'];
 var REGISTRY_DIR = path.join(require('os').homedir(), '.cocos-mcp', 'editors');
 var SDK_PATH = path.join(__dirname, 'mcp-sdk', 'index.js');
 
@@ -378,7 +390,8 @@ function getEditorExecPath() {
 function writeRegistry() {
     if (!_mcpServer || !_mcpServer.started) return;
     try {
-        if (!fs.existsSync(REGISTRY_DIR)) fs.mkdirSync(REGISTRY_DIR, { recursive: true });
+        if (!fs.existsSync(REGISTRY_DIR)) fs.mkdirSync(REGISTRY_DIR, { recursive: true, mode: 0o700 });
+        try { fs.chmodSync(REGISTRY_DIR, 0o700); } catch (e) { /* Windows / restricted FS */ }
         var entry = {
             pid: process.pid,
             projectPath: Editor.Project.path,
@@ -388,10 +401,18 @@ function writeRegistry() {
             url: 'http://' + _mcpServer.host + ':' + _mcpServer.port + '/mcp',
             editorVersion: (Editor.App && Editor.App.version) ? Editor.App.version : '',
             execPath: getEditorExecPath(),
+            extensionVersion: require('./package.json').version,
+            gatewayApiVersion: MCP_GATEWAY_API_VERSION,
+            mcpProtocolVersions: MCP_PROTOCOL_VERSIONS.slice(),
+            authToken: _mcpServer.authToken,
             startedAt: _mcpServer.stats.startedAt,
             updatedAt: new Date().toISOString(),
         };
-        fs.writeFileSync(path.join(REGISTRY_DIR, process.pid + '.json'), JSON.stringify(entry, null, 2), 'utf-8');
+        var registryFile = path.join(REGISTRY_DIR, process.pid + '.json');
+        var tempFile = registryFile + '.' + Date.now() + '.tmp';
+        fs.writeFileSync(tempFile, JSON.stringify(entry, null, 2), { encoding: 'utf-8', mode: 0o600 });
+        fs.renameSync(tempFile, registryFile);
+        try { fs.chmodSync(registryFile, 0o600); } catch (e) { /* Windows / restricted FS */ }
     } catch (e) {
         console.warn('[cc-mcp] writeRegistry failed:', e.message || e);
     }
@@ -424,6 +445,7 @@ async function startMcpServer() {
     if (_mcpServer && _mcpServer.started) return;
     var port = await findFreePort(MCP_DEFAULT_PORT);
     var sdk = require(SDK_PATH);
+    var authToken = require('crypto').randomBytes(32).toString('hex');
 
     // ── 使用 mcp-sdk ──────────────────────────────────────────────
     var tdef = require('./server/tools');
@@ -446,8 +468,12 @@ async function startMcpServer() {
 
     var server = sdk.createServer({
         name: 'cc-3-8-x-mcp',
-        version: '2.0.0',
+        version: require('./package.json').version,
         port: port,
+        protocolVersion: MCP_PROTOCOL_VERSIONS[0],
+        supportedProtocolVersions: MCP_PROTOCOL_VERSIONS,
+        allowedOrigins: [],
+        authToken: authToken,
         tools: toolDefs.map(function (t) {
             return {
                 name: t.name,
@@ -473,6 +499,7 @@ async function startMcpServer() {
         started: true,
         host: '127.0.0.1',
         port: port,
+        authToken: authToken,
         toolCount: toolDefs.length,
         resourceCount: resourceDefs.length,
         stats: stats,

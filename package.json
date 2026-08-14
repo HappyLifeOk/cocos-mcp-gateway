@@ -1,6 +1,6 @@
 {
   "name": "cocos-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Global MCP router and offline Prefab CLI for Cocos Creator projects.",
   "license": "Apache-2.0",
   "author": "付饶",

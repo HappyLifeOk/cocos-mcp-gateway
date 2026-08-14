@@ -1,6 +1,6 @@
 {
   "name": "cocos-mcp",
-  "version": "0.1.0+codex.20260729071645",
+  "version": "0.2.0+codex.20260814024928",
   "description": "\u5728 Codex \u4e2d\u7edf\u4e00\u53d1\u73b0\u3001\u8fde\u63a5\u548c\u63a7\u5236\u672c\u673a\u591a\u4e2a Cocos Creator \u9879\u76ee\uff0c\u5e76\u63d0\u4f9b\u79bb\u7ebf Prefab CLI\u3002",
   "author": {
     "name": "\u4ed8\u9976"

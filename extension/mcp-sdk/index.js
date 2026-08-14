@@ -115,12 +115,14 @@ function createServer(options) {
     const tools = options.tools || [];
     const resources = options.resources || [];
     const customHandlers = options.customHandlers || {};
+    const supportedProtocolVersions = options.supportedProtocolVersions;
 
     // 初始化 dispatcher
     const dispatcher = createDispatcher({
         name,
         version,
         protocolVersion: options.protocolVersion,
+        supportedProtocolVersions,
         tools,
         resources,
         customHandlers,
@@ -152,8 +154,13 @@ function createServer(options) {
                 port,
                 host: options.host || '127.0.0.1',
                 path: options.path || '/mcp',
+                serverName: name,
+                serverVersion: version,
                 protocolVersion: options.protocolVersion,
+                supportedProtocolVersions,
                 allowedOrigins: options.allowedOrigins,
+                authToken: options.authToken,
+                maxBodyBytes: options.maxBodyBytes,
             });
             httpTransport.start();
         }

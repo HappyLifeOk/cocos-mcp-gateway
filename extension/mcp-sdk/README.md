@@ -30,6 +30,10 @@ const { createServer, tool, textContent } = require('universal-mcp-sdk');
 const server = createServer({
     name: 'my-first-mcp',
     version: '1.0.0',
+    protocolVersion: '2025-06-18',
+    supportedProtocolVersions: ['2025-06-18', '2025-03-26'],
+    authToken: process.env.MCP_AUTH_TOKEN,
+    allowedOrigins: [],
     tools: [
         tool('hello', '打招呼', { name: { type: 'string' } },
             async ({ name }) => textContent(`Hello, ${name}!`)),
@@ -215,7 +219,10 @@ handler 直接返回 string / object 时，SDK 自动包成 text（见下方 API
 | `/mcp` | `GET` | 返回 server 信息 + 端点说明（**注意：握手 `initialize` 走 POST，不是这个 GET**） |
 | `/` | `GET` | 健康检查 `{status:"ok"}` |
 
-- 所有端点开 **CORS**（`Access-Control-Allow-Origin: *`），浏览器 / 跨域客户端可直连，`OPTIONS` 预检回 `204`
+- HTTP server 默认监听 `127.0.0.1`。设置 `authToken` 后，`/mcp` 的 GET/POST 必须带 `Authorization: Bearer <token>`
+- 浏览器 `Origin` 默认全部拒绝；只有 `allowedOrigins` 显式列出的来源才会收到对应的 CORS 头，`OPTIONS` 预检回 `204`
+- POST 只接受 `application/json`，默认请求体上限 4 MiB；可用 `maxBodyBytes` 调整
+- 支持用 `supportedProtocolVersions` 声明协议集合，并校验 `MCP-Protocol-Version` 请求头
 - **无 session、无 SSE**：每个 POST 是独立的请求 / 响应，接入方不需要维护 session id
 
 ---

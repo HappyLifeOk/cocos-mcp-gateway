@@ -12,7 +12,7 @@ exports.template = /* html */ `
     <div class="row"><label>Tools</label><span id="mcpTools">-</span></div>
     <div class="row"><label>请求数</label><span id="mcpReqCount">0</span></div>
     <div class="mcp-actions">
-      <ui-button id="btnCopyMcpUrl">复制端点</ui-button>
+      <ui-button id="btnCopyMcpUrl">复制连接配置</ui-button>
       <ui-button id="btnCopyCli">复制 CLI 命令</ui-button>
       <ui-button id="btnRestartMcp" class="secondary">重启</ui-button>
     </div>
@@ -257,9 +257,9 @@ exports.methods = {
     async onCopyMcpUrl() {
         try {
             const cfg = await Editor.Message.request('cc-3-8-x-mcp', 'get-mcp-config');
-            if (!cfg || !cfg.url) { this.showToast('MCP 未运行'); return; }
-            await navigator.clipboard.writeText(cfg.url);
-            this.showToast('已复制: ' + cfg.url);
+            if (!cfg || !cfg.connectionConfig) { this.showToast('MCP 未运行'); return; }
+            await navigator.clipboard.writeText(JSON.stringify(cfg.connectionConfig, null, 2));
+            this.showToast('已复制带鉴权头的连接配置');
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
     async onCopyCli() {

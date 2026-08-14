@@ -2,7 +2,7 @@
 
 Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
 
-把编辑器的 scene/asset/preview/local 能力以 MCP 协议暴露给 Claude Code；同时提供无需编辑器运行的 offline prefab 编辑能力，支持节点增删克隆与 stub 节点属性覆写。
+把编辑器的 scene/asset/preview/local 能力通过本机 MCP 网关交给 Codex、Claude Code 等客户端；同时提供无需编辑器运行的 offline prefab 编辑能力，支持节点增删克隆与 stub 节点属性覆写。
 
 ---
 
@@ -23,21 +23,24 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
 ## 架构
 
 ```
-Claude Code (MCP client)
+Codex / Claude Code / 其他 stdio MCP client
         │  stdio (JSON-RPC)
         ▼
 ┌─────────────────────────────┐
-│  router/bin.js              │  ← 统一入口，聚合多个编辑器
+│  全局 cocos-mcp plugin      │  ← Codex 注册入口
+│  runtime/router/bin.js      │  ← 聚合多个编辑器
 │  - 扫 ~/.cocos-mcp/editors/ │
 │  - offline prefab tools     │
 └───────────┬─────────────────┘
-            │  HTTP MCP (JSON-RPC)
+            │  loopback HTTP MCP + Bearer token
     ┌───────┴────────┐
     │                │
     ▼                ▼
 编辑器实例 A      编辑器实例 B       ← 每个项目一个编辑器进程
-server/mcp-server.js              ← 在 Cocos 编辑器进程内跑 HTTP MCP server
+项目内 cc-3-8-x-mcp 扩展          ← 在 Cocos 编辑器进程内跑 HTTP MCP server
 ```
+
+职责边界：项目扩展是编辑器能力与 CLI 的源码真源；全局 `cocos-mcp` 只负责客户端注册、实例发现和同步快照。升级项目扩展后，用全局仓的 `scripts/sync-runtime.js` 同步，项目代码不依赖某台机器上的固定全局路径。
 
 offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 router 进程内直接执行，调用 `cli/src/index.js`，不需要编辑器运行。
 
@@ -65,6 +68,8 @@ offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 rou
 **职责**：
 
 - 扫描 `~/.cocos-mcp/editors/` 发现活跃编辑器（心跳超 120s 视为已死）
+- 校验 PID、loopback endpoint、网关版本和协议版本；拒绝把请求转发到非本机地址
+- 从权限为 `0600` 的注册记录读取每个实例的随机 bearer token，不把 token 暴露在 tool 列表中
 - 每隔 15s 自动发现新实例
 - 给每个编辑器的 tool 加 `<shortName>__` 前缀，合并后暴露给 Claude Code
 - 内置 offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`），不带前缀，全局可用
@@ -89,7 +94,7 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 
 | 区块 | 内容 |
 |---|---|
-| MCP Server | 运行状态指示灯 / 端点地址 / tool 数量 / 请求计数；复制端点、复制 CLI 命令、重启 |
+| MCP Server | 运行状态指示灯 / 端点地址 / tool 数量 / 请求计数；复制带鉴权头的连接配置、复制 CLI 命令、重启 |
 | 编辑器状态 | 当前分支 / HEAD / 预览地址和端口 / 编辑器 PID / Watcher 状态 / 最后更新时间 |
 | 快捷动作 | 一键刷新（资源+场景+预览）/ 软重载场景 / 打开预览浏览器 / 截图 / 打开 .dev 目录 / 清理临时文件 / 手动输入路径重新导入 |
 | Debug 注入 | 在预览页面执行任意 JS（`eval_js`），结果直接展示；自定义快捷按钮（配置见下方） |
@@ -177,12 +182,16 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 {
   "pid": 12345,
   "url": "http://127.0.0.1:7788/mcp",
-  "shortName": "forest",
-  "projectPath": "/path/to/project"
+  "projectShortName": "forest",
+  "projectPath": "/path/to/project",
+  "extensionVersion": "2.1.0",
+  "gatewayApiVersion": 1,
+  "mcpProtocolVersions": ["2025-06-18", "2025-03-26"],
+  "authToken": "<64 hex chars>"
 }
 ```
 
-router 定期扫此目录，心跳超过 120s 的记录视为死亡自动剔除。tool 名以 `<shortName>__` 为前缀隔离，同机多开不冲突。
+注册目录权限为 `0700`，记录以原子写入方式更新且权限为 `0600`。router 定期扫此目录，心跳超过 120s 的记录视为死亡自动剔除。tool 名以 `<shortName>__` 为前缀隔离，同机多开不冲突。
 
 ---
 
@@ -199,6 +208,16 @@ claude mcp add cocos -- node /path/to/cc-3-8-x-mcp/router/bin.js
 ```
 
 接入后 Claude Code 即可调用所有活跃编辑器的 tool，以及全局 offline prefab tools。
+
+Codex 使用全局 `cocos-mcp` plugin 的 `.mcp.json` 启动同一个 stdio router。不要把某个项目的临时 HTTP endpoint 直接注册成全局 Codex MCP；endpoint 会随编辑器进程和端口变化。
+
+## 网关兼容与安全
+
+- router 对客户端使用 MCP `2025-06-18`；连接项目扩展时优先协商 `2025-06-18`，滚动升级期间可回退 `2025-03-26`。
+- 项目 HTTP server 只监听 loopback，所有 MCP GET/POST 都要求每次启动随机生成的 bearer token。
+- 浏览器请求默认不允许任何 `Origin`；确有嵌入式浏览器需求时必须显式配置 allowlist。
+- POST 只接受 `application/json`，默认 body 上限 4 MiB，并校验 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name`（后两者传入时）。
+- router 为探活、普通 tool 和资源/刷新/场景类长操作使用分级超时，避免固定短超时误杀 Cocos 长任务。
 
 ---
 

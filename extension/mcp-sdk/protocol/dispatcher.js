@@ -22,6 +22,7 @@ function createDispatcher(options) {
     const name = options.name || 'unknown';
     const version = options.version || '1.0.0';
     const protocolVersion = options.protocolVersion || DEFAULT_PROTOCOL_VERSION;
+    const supportedProtocolVersions = options.supportedProtocolVersions || [protocolVersion];
     const tools = options.tools || [];
     const resources = options.resources || [];
     const customHandlers = options.customHandlers || {};
@@ -93,7 +94,9 @@ function createDispatcher(options) {
         switch (method) {
             case 'initialize':
                 return makeSuccessResponse(id, {
-                    protocolVersion,
+                    protocolVersion: supportedProtocolVersions.includes(params && params.protocolVersion)
+                        ? params.protocolVersion
+                        : protocolVersion,
                     capabilities: {
                         tools: tools.length > 0 ? {} : undefined,
                         resources: resources.length > 0 ? {} : undefined,

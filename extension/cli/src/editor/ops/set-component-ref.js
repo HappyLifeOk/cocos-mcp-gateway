@@ -92,7 +92,7 @@ function execSetComponentRef(prefabData, op) {
 
   const comp = findComponent(elements, node, componentType);
   if (!comp) {
-    throw new Error(`editPrefab [set-component-ref]: 节点 "${node._name}" 未挂 "${componentType}" 组件`);
+    throw new Error(`editPrefab [set-component-ref]: 节点 "${node._name}" 未挂 "${rawComponentType}" 组件`);
   }
 
   const { node: refNode, nodeId: refNodeId } = resolveNode(prefabData, refNodeSelector, 'set-component-ref');

@@ -40,7 +40,20 @@ cocos-mcp-setup-claude
 ```
 
 各 Cocos 项目只负责运行 `extensions/cc-3-8-x-mcp` 编辑器扩展，并向
-`~/.cocos-mcp/editors/` 注册自己的 `projectPath`、版本和 endpoint。
+`~/.cocos-mcp/editors/` 注册自己的 `projectPath`、版本、协议、loopback endpoint
+和进程级随机鉴权 token。项目扩展是编辑器能力的源码真源；全局插件只负责
+Codex 注册、实例发现、路由和同步快照。
 
 不同开发者可以把全局仓和 Cocos 项目放在任意目录；安装时由 npm/客户端配置解析
 本机实际路径，项目代码和构建流程始终只依赖项目内扩展。
+
+## 0.2 网关升级
+
+- Codex 侧 router 使用 MCP `2025-06-18`，连接旧项目扩展时可回退 `2025-03-26`。
+- 注册记录目录收紧为 `0700`，带 token 的实例记录原子写入并收紧为 `0600`。
+- router 只接受 `http://loopback:<port>/mcp`，向项目扩展转发 bearer token、协议头和可选 routing headers。
+- 探活、普通 tool、资源读取和 Cocos 长操作使用分级超时。
+- 项目 HTTP server 默认拒绝浏览器 Origin，限制 JSON body，并校验协议版本。
+
+更新顺序允许滚动进行：先同步并重载某个项目扩展，再更新全局 router；新 router
+可以同时连接 2.1.0 项目扩展和未升级的旧实例。

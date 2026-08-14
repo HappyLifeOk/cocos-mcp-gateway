@@ -153,6 +153,9 @@ function parsePrefab(filePath) {
     raw,
     elements,
     rootId,
+    // 解析结果可直接交给 overrides/nested helpers 使用；调用方不应再被迫
+    // 手工补一遍来源路径。editPrefab 仍可用 options.projectRoot 覆盖它。
+    resolverStartPath: filePath,
     findNodeByName,
     findNodesByType,
     getRoot,

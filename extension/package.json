@@ -1,6 +1,6 @@
 {
   "package_version": 2,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "name": "cc-3-8-x-mcp",
   "title": "Cocos Creator 3.8.x MCP Server",
   "description": "把 Cocos Creator 3.8.x 编辑器能力（scene/asset-db/preview/local）以 MCP 协议暴露给外部 AI 客户端；兼容原 dev-reload 信号文件通道",

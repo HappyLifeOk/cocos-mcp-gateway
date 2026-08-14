@@ -25,16 +25,23 @@
 var fs = require('fs');
 var path = require('path');
 var os = require('os');
-var http = require('http');
 
 var offlineTools = require('./src/offline-tools.js');
 var editorControl = require('./src/editor-control.js');
+var rpc = require('./src/http-json-rpc.js');
 
 var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
 var STALE_MS = 120 * 1000;  // 2 分钟没心跳视为死
 var DISCOVERY_INTERVAL_MS = 15 * 1000;
-var PROTOCOL_VERSION = '2024-11-05';
-var ROUTER_INFO = { name: 'cocos-mcp-router', version: '0.1.0' };
+var PROTOCOL_VERSION = '2025-06-18';
+var ROUTER_INFO = { name: 'cocos-mcp-router', version: '0.2.0' };
+
+try {
+    if (!fs.existsSync(REGISTRY_DIR)) fs.mkdirSync(REGISTRY_DIR, { recursive: true, mode: 0o700 });
+    fs.chmodSync(REGISTRY_DIR, 0o700);
+} catch (e) {
+    logErr('registry directory hardening failed:', e.message);
+}
 
 function logErr() {
     // router 走 stdio，不能往 stdout 写非 JSON-RPC 内容，日志只能走 stderr
@@ -65,7 +72,16 @@ function scanRegistry() {
                     return;
                 }
                 var info = JSON.parse(fs.readFileSync(full, 'utf-8'));
-                if (!info || !info.url) return;
+                var invalidReason = rpc.validateRegistryEntry(info);
+                if (invalidReason) {
+                    logErr('ignored registry entry', name, invalidReason);
+                    return;
+                }
+                info.protocolVersion = rpc.selectProtocolVersion(info);
+                if (!info.protocolVersion) {
+                    logErr('ignored incompatible editor', info.projectShortName, 'versions=' + JSON.stringify(info.mcpProtocolVersions || []));
+                    return;
+                }
                 entries.push(info);
             } catch (e) { /* ignore */ }
         });
@@ -73,46 +89,29 @@ function scanRegistry() {
     return entries;
 }
 
-function httpJsonRpc(targetUrl, body) {
-    return new Promise(function (resolve, reject) {
-        try {
-            var u = new URL(targetUrl);
-            var data = JSON.stringify(body);
-            var req = http.request({
-                hostname: u.hostname,
-                port: u.port,
-                path: u.pathname,
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
-                timeout: 8000,
-            }, function (res) {
-                var chunks = [];
-                res.on('data', function (c) { chunks.push(c); });
-                res.on('end', function () {
-                    var raw = Buffer.concat(chunks).toString('utf-8');
-                    try { resolve(JSON.parse(raw)); }
-                    catch (e) { reject(new Error('invalid json from ' + targetUrl + ': ' + raw.slice(0, 120))); }
-                });
-            });
-            req.on('error', reject);
-            req.on('timeout', function () { req.destroy(new Error('timeout')); });
-            req.write(data);
-            req.end();
-        } catch (e) { reject(e); }
-    });
-}
-
 async function probeEditor(info) {
     try {
-        var initRes = await httpJsonRpc(info.url, {
+        var requestOptions = {
+            authToken: info.authToken,
+            protocolVersion: info.protocolVersion,
+            timeoutMs: rpc.PROBE_TIMEOUT_MS,
+        };
+        var initRes = await rpc.httpJsonRpc(info.url, {
             jsonrpc: '2.0', id: 1, method: 'initialize', params: {
-                protocolVersion: PROTOCOL_VERSION,
+                protocolVersion: info.protocolVersion,
                 clientInfo: { name: 'cocos-mcp-router', version: ROUTER_INFO.version },
                 capabilities: {},
             },
-        });
+        }, requestOptions);
         if (initRes.error) throw new Error(initRes.error.message);
-        var listRes = await httpJsonRpc(info.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+        var negotiatedProtocol = initRes.result && initRes.result.protocolVersion;
+        if (rpc.DOWNSTREAM_PROTOCOL_VERSIONS.indexOf(negotiatedProtocol) < 0) {
+            throw new Error('unsupported negotiated protocol: ' + negotiatedProtocol);
+        }
+        // 兼容滚动升级：旧扩展收到 2025-06-18 initialize 时可能回退到 2025-03-26。
+        info.protocolVersion = negotiatedProtocol;
+        requestOptions.protocolVersion = negotiatedProtocol;
+        var listRes = await rpc.httpJsonRpc(info.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, requestOptions);
         if (listRes.error) throw new Error(listRes.error.message);
         return listRes.result.tools || [];
     } catch (e) {
@@ -123,7 +122,11 @@ async function probeEditor(info) {
 
 async function probeEditorResources(info) {
     try {
-        var listRes = await httpJsonRpc(info.url, { jsonrpc: '2.0', id: 3, method: 'resources/list' });
+        var listRes = await rpc.httpJsonRpc(info.url, { jsonrpc: '2.0', id: 3, method: 'resources/list' }, {
+            authToken: info.authToken,
+            protocolVersion: info.protocolVersion,
+            timeoutMs: rpc.PROBE_TIMEOUT_MS,
+        });
         if (listRes.error) throw new Error(listRes.error.message);
         return listRes.result.resources || [];
     } catch (e) {
@@ -158,6 +161,10 @@ async function discover() {
             pid: info.pid,
             startedAt: Date.parse(info.startedAt) || 0,   // 同项目双实例时 dedupe 按它选代表
             url: info.url,
+            authToken: info.authToken || '',
+            extensionVersion: info.extensionVersion || '',
+            gatewayApiVersion: info.gatewayApiVersion || 0,
+            protocolVersion: info.protocolVersion,
             tools: tools,
             resources: resources,
             lastProbed: Date.now(),
@@ -265,7 +272,7 @@ function buildAggregatedToolList() {
     // router 自身的 meta tool
     out.push({
         name: 'router_list_editors',
-        description: '列出当前 router 发现的所有活跃 Cocos 编辑器（shortName / pid / url / tool 数）',
+        description: '列出当前 router 发现的所有活跃 Cocos 编辑器（实例、版本、协议、tool 数；不暴露 token）',
         inputSchema: { type: 'object', properties: {} },
     });
     // offline prefab tools（不需要编辑器运行）
@@ -401,7 +408,16 @@ async function handleToolCall(name, args) {
     if (name === 'router_list_editors') {
         await discover();
         var list = Array.from(editors.values()).map(function (ed) {
-            return { shortName: ed.shortName, pid: ed.pid, url: ed.url, projectPath: ed.projectPath, toolCount: ed.tools.length };
+            return {
+                shortName: ed.shortName,
+                pid: ed.pid,
+                url: ed.url,
+                projectPath: ed.projectPath,
+                extensionVersion: ed.extensionVersion,
+                gatewayApiVersion: ed.gatewayApiVersion,
+                protocolVersion: ed.protocolVersion,
+                toolCount: ed.tools.length,
+            };
         });
         return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] };
     }
@@ -427,9 +443,13 @@ async function handleToolCall(name, args) {
     }
 
     try {
-        var forward = await httpJsonRpc(hit.editor.url, {
+        var forward = await rpc.httpJsonRpc(hit.editor.url, {
             jsonrpc: '2.0', id: Date.now(), method: 'tools/call',
             params: { name: hit.originalName, arguments: args },
+        }, {
+            authToken: hit.editor.authToken,
+            protocolVersion: hit.editor.protocolVersion,
+            timeoutMs: rpc.toolTimeoutMs(hit.originalName),
         });
         if (forward.error) {
             return { content: [{ type: 'text', text: 'editor error: ' + forward.error.message }], isError: true };
@@ -454,9 +474,13 @@ async function handleResourceRead(uri) {
         return { contents: [{ type: 'text', text: 'editor not found for resource: ' + decoded.shortName, mimeType: 'text/plain' }] };
     }
     try {
-        var forward = await httpJsonRpc(ed.url, {
+        var forward = await rpc.httpJsonRpc(ed.url, {
             jsonrpc: '2.0', id: Date.now(), method: 'resources/read',
             params: { uri: decoded.uri },
+        }, {
+            authToken: ed.authToken,
+            protocolVersion: ed.protocolVersion,
+            timeoutMs: rpc.TOOL_TIMEOUT_MS,
         });
         if (forward.error) {
             return { contents: [{ type: 'text', text: 'editor error: ' + forward.error.message, mimeType: 'text/plain' }] };

@@ -32,7 +32,8 @@
 2. 只保留 `projectPath` 与当前项目根目录一致的记录。
 3. 校验 `pid` 仍存活。
 4. 多个匹配时取 `updatedAt` 最新的记录。
-5. 后续所有 HTTP MCP 请求都使用该记录的 `url`。
+5. 后续所有 HTTP MCP 请求都使用该记录的 `url`、`authToken` 和双方都支持的最高 `mcpProtocolVersions`。
+6. `gatewayApiVersion >= 1` 时，缺失或格式不正确的 `authToken` 视为无效注册记录；token 不写日志、不贴到回复里。
 
 快速确认脚本：
 
@@ -85,10 +86,16 @@ HTTP 调用格式：
 
 ```bash
 curl -sS -X POST http://127.0.0.1:<mcp-port>/mcp \
+  -H "Authorization: Bearer ${MCP_TOKEN}" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
+  -H 'MCP-Protocol-Version: 2025-06-18' \
+  -H 'Mcp-Method: tools/call' \
+  -H 'Mcp-Name: preview_query_url' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"preview_query_url","arguments":{}}}'
 ```
+
+`MCP_TOKEN` 只从已绑定的注册记录读入当前进程；不要 `echo`、不要写进仓库或持久 shell 配置。旧扩展没有 `gatewayApiVersion` 时允许无 token 连接，仅用于滚动升级兼容。
 
 ## 预览 URL
 
