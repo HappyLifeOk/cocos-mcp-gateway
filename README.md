@@ -4,6 +4,8 @@
 Gateway。它是系统中唯一的 MCP Server，负责多项目发现、工具聚合、路由、编辑器
 生命周期和离线 Prefab CLI。
 
+第一次使用请先阅读：[安装与使用指南](docs/getting-started.md)。
+
 每个 Cocos Creator 3.8.x 项目只安装轻量 `cc-3-8-x-mcp`。扩展通过私有本机
 `/bridge` 把 `Editor.Message` 能力交给 Gateway，不再运行项目级 MCP Server，
 也不再依赖 `universal-mcp-sdk`。
