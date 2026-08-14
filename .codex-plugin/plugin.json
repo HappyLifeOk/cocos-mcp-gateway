@@ -1,6 +1,6 @@
 {
   "name": "cocos-mcp",
-  "version": "0.3.0+codex.20260814040508",
+  "version": "0.3.0+codex.20260814041609",
   "description": "\u4f5c\u4e3a\u552f\u4e00\u5168\u5c40 MCP Gateway\uff0c\u5728 Codex \u4e2d\u53d1\u73b0\u548c\u63a7\u5236\u672c\u673a\u591a\u4e2a Cocos Creator Editor Bridge\uff0c\u5e76\u63d0\u4f9b\u79bb\u7ebf Prefab CLI\u3002",
   "author": {
     "name": "\u4ed8\u9976"

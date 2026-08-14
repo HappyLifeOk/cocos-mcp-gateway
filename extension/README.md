@@ -6,6 +6,16 @@ Cocos Creator 3.8.x 专用的 Editor Bridge 扩展 + 离线 prefab 读写 CLI。
 `cocos-mcp-gateway`；同时提供无需编辑器运行的 offline prefab 编辑能力。
 本扩展不是 MCP Server，不能被 Codex、Claude Code 或其他 MCP 客户端直接注册。
 
+## 版本选择
+
+| Tag | 架构 | 适用情况 |
+|---|---|---|
+| `v2.0.0` | 项目扩展内运行 MCP Server，并依赖 `universal-mcp-sdk` | 仅用于尚未迁移的旧配置 |
+| `v3.0.0` | 项目扩展只运行私有 Editor Bridge，由全局 `cocos-mcp-gateway` 统一接入 | 当前推荐版本 |
+
+`v2.0.0` 与 `v3.0.0` 不兼容。新接入直接使用 `v3.0.0`；仍在直连项目
+`/mcp` endpoint 的使用者，应先按升级说明迁移 Gateway，再切换到 `v3.0.0`。
+
 ---
 
 ## 文档导航
