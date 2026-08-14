@@ -34,7 +34,13 @@ var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
 var STALE_MS = 120 * 1000;  // 2 分钟没心跳视为死
 var DISCOVERY_INTERVAL_MS = 15 * 1000;
 var PROTOCOL_VERSION = '2025-06-18';
-var GATEWAY_INFO = { name: 'cocos-mcp-gateway', version: '0.3.0' };
+var GATEWAY_INFO = { name: 'cocos-mcp-gateway', version: '0.3.1' };
+var GATEWAY_INSTRUCTIONS = [
+    '先识别项目再调用 Cocos 工具：调用 gateway_list_editors，并用规范化后的真实绝对 projectPath 精确匹配当前工作区；不得只凭 shortName、工具前缀或项目名猜实例。项目工具只使用 transport=editor-bridge、gatewayApiVersion>=2、bridgeApiVersion=1 的实例。项目 /bridge 是 Gateway 私有协议：不得直接调用或注册为 MCP Server，不得读取、输出或传播注册记录中的 authToken。',
+    '查询或修改 .prefab/.anim 时优先使用全局 offline 工具 prefab_query、prefab_edit、prefab_batch，filePath 必须是绝对路径。修改前先查询结构；批量修改先 dry-run；失败时停止，不得绕过 CLI 直接编辑序列化 JSON。',
+    '场景运行态、AssetDB、预览和编辑器状态使用已绑定实例的 <shortName>__* 工具。修改资源后调用 asset_reimport；多资源或依赖不确定时调用 asset_refresh，再按项目约定调用 preview_refresh_and_reload。',
+    '启动、等待、重启或关闭编辑器时必须显式确认目标绝对 projectPath。仅对 Cocos Creator >=3.8.0 <3.9.0 使用 cc-3-8-x-mcp；缺少扩展时只有在用户授权后才能安装。存在活跃调试连接时不得用 force 绕过保护。',
+].join('\n');
 
 try {
     if (!fs.existsSync(REGISTRY_DIR)) fs.mkdirSync(REGISTRY_DIR, { recursive: true, mode: 0o700 });
@@ -338,6 +344,7 @@ async function handleMessage(msg) {
                 result = {
                     protocolVersion: PROTOCOL_VERSION,
                     serverInfo: GATEWAY_INFO,
+                    instructions: GATEWAY_INSTRUCTIONS,
                     capabilities: {
                         tools: { listChanged: true },
                         resources: {},

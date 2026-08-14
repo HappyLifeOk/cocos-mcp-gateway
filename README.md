@@ -41,6 +41,10 @@ Codex 通过本仓库的个人插件清单加载 `.mcp.json`。Claude Code 和�
 cocos-mcp-setup-claude
 ```
 
+该命令会同时注册用户级 stdio MCP，并把仓库中的 `cocos-mcp-control` 安装到
+Claude Code 的个人 Skill 目录。后续再次运行只更新由 Gateway 管理的副本；如果
+用户已经维护了同名自定义 Skill，安装器会保留它并给出提示，不会覆盖。
+
 各 Cocos Creator 3.8.x 项目只负责运行 `extensions/cc-3-8-x-mcp`，并向
 `~/.cocos-mcp/editors/` 注册自己的 `projectPath`、Bridge 版本、loopback endpoint
 和进程级随机鉴权 token。客户端永远只连接 Gateway，不能直接连接 `/bridge`。
@@ -63,6 +67,8 @@ Codex / Claude Code / 其他 MCP 客户端
 ```
 
 - Gateway 对客户端使用 MCP `2025-06-18`，项目扩展不再解析 MCP。
+- Gateway 在 `initialize` 响应中返回跨客户端 `instructions`，统一项目路径绑定、
+  Bridge 私有边界、Prefab 安全修改和编辑器生命周期约束。
 - Gateway 每 15 秒发现活跃编辑器，统一聚合、加前缀并路由 tools/resources；
   编辑器变化时发送 `notifications/tools/list_changed`。
 - 注册目录权限为 `0700`，带 token 的实例记录原子写入并限制为 `0600`。
