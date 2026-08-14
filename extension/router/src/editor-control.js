@@ -5,8 +5,8 @@
  *
  * Router 级编辑器进程管理 tool。spawn / kill / wait_ready / restart Cocos 编辑器进程。
  *
- * 为什么挂在 router（而不是编辑器内 server）：
- *   编辑器内的 MCP server 寄生在编辑器进程里，kill 编辑器 = kill server 自己，自杀后没法
+ * 为什么挂在 Gateway（而不是编辑器内 Bridge）：
+ *   编辑器内的 Bridge 寄生在编辑器进程里，kill 编辑器 = kill Bridge 自己，自杀后没法
  *   再把自己拉起来。router 是进程外的常驻 stdio 进程，编辑器死了它还活着，所以「关 / 重启 /
  *   等就绪」这类要跨越编辑器进程生死的能力只能放这里，跟 offline prefab tools 同类，不走转发。
  *
@@ -21,13 +21,12 @@
 var fs = require('fs');
 var path = require('path');
 var os = require('os');
-var http = require('http');
 var cp = require('child_process');
 var crypto = require('crypto');
+var bridgeRpc = require('./http-json-rpc.js');
 
 var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
 var STALE_MS = 120 * 1000;          // 与 bin.js 对齐：2 分钟没心跳视为死
-var PROTOCOL_VERSION = '2024-11-05';
 
 // ── 通用小工具 ──────────────────────────────────────────────────
 
@@ -458,53 +457,34 @@ function spawnEditor(execPath, projectPath, opts) {
 
 // ── 就绪探测 ────────────────────────────────────────────────────
 
-/** 通用 HTTP MCP 调用，返回完整 JSON-RPC 响应（失败返回 null）。probeReady/probeProjectReady 共用。 */
-function httpMcp(url, method, params, timeoutMs) {
-    return new Promise(function (resolve) {
-        try {
-            var u = new URL(url);
-            var body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: method, params: params || {} });
-            var req = http.request({
-                hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-                timeout: timeoutMs || 4000,
-            }, function (res) {
-                var chunks = [];
-                res.on('data', function (c) { chunks.push(c); });
-                res.on('end', function () {
-                    try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
-                    catch (e) { resolve(null); }
-                });
-            });
-            req.on('error', function () { resolve(null); });
-            req.on('timeout', function () { req.destroy(); resolve(null); });
-            req.write(body);
-            req.end();
-        } catch (e) { resolve(null); }
-    });
-}
-
-/** MCP initialize 探活：能 initialize = MCP server 起来了（但不代表进了项目，登录页态也能起）。 */
-function probeReady(url) {
-    return httpMcp(url, 'initialize', {
-        protocolVersion: PROTOCOL_VERSION,
-        clientInfo: { name: 'editor-control', version: '0' },
-        capabilities: {},
-    }).then(function (r) { return !!(r && !r.error); });
+/** Bridge ping 探活：能响应只代表扩展已启动，不代表 AssetDB 已就绪。 */
+function probeReady(entry) {
+    return bridgeRpc.bridgeJsonRpc(entry.url, {
+        jsonrpc: '2.0', id: 1, method: 'bridge/ping', params: {},
+    }, {
+        authToken: entry.authToken,
+        timeoutMs: 4000,
+    }).then(function (r) {
+        return !!(r && !r.error && r.result && r.result.bridgeApiVersion === 1);
+    }).catch(function () { return false; });
 }
 
 /**
- * 项目就绪探测：MCP initialize 成功 ≠ 进了项目 —— 实测激进清登录态后 initialize 仍 ready，
+ * 项目就绪探测：Bridge ping 成功 ≠ 进了项目 —— 扩展已启动时项目仍可能在加载，
  * 但编辑器 UI 卡在登录页。用 asset_query_assets 查 db://assets/* 探 asset-db 是否就绪：
  * 项目真打开才加载 asset-db、返回非空顶层资源；登录页 / 项目加载中则空或失败。
  * 正向（进项目非空）已实测；负向（登录页态返回啥）按逻辑推断，未在登录页态实测。
  */
-function probeProjectReady(url) {
-    return httpMcp(url, 'tools/call', {
-        name: 'asset_query_assets', arguments: { pattern: 'db://assets/*' },
-    }, 6000).then(function (r) {
+function probeProjectReady(entry) {
+    return bridgeRpc.bridgeJsonRpc(entry.url, {
+        jsonrpc: '2.0', id: 2, method: 'bridge/invoke',
+        params: { name: 'asset_query_assets', arguments: { pattern: 'db://assets/*' } },
+    }, {
+        authToken: entry.authToken,
+        timeoutMs: 6000,
+    }).then(function (r) {
         return hasReadyAssetResult(r);
-    });
+    }).catch(function () { return false; });
 }
 
 function hasReadyAssetResult(r) {
@@ -537,7 +517,7 @@ function hasReadyAssetText(txt) {
 
 /**
  * 轮询等指定项目的编辑器就绪。
- *   就绪判定：注册表有 projectPath 匹配、非 stale、pid≠excludePid 的 entry，且 probeReady 成功。
+ *   就绪判定：注册表有 projectPath 匹配、非 stale、pid≠excludePid 的 entry，且 Bridge 探活成功。
  *   excludePid：restart 时传被 kill 的旧 pid，避免匹配到尚未删净的旧注册。
  * 返回 { ready, entry?, reason?, waitedMs }。
  */
@@ -545,10 +525,10 @@ async function waitReady(projectPath, opts) {
     opts = opts || {};
     var timeoutMs = opts.timeoutMs || 90000;   // 大项目冷启动慢，默认 90s
     var excludePid = opts.excludePid || 0;
-    var requireProject = opts.requireProject !== false;   // 默认要求项目就绪（区分登录页/加载中），传 false 退回只看 MCP
+    var requireProject = opts.requireProject !== false;   // 默认要求项目就绪（区分登录页/加载中），传 false 只看 Bridge
     var start = Date.now();
     var lastReason = 'still waiting';
-    var sawMcp = false;
+    var sawBridge = false;
 
     while (Date.now() - start < timeoutMs) {
         var hit = activeEditors().filter(function (e) {
@@ -556,13 +536,13 @@ async function waitReady(projectPath, opts) {
         })[0];
 
         if (hit) {
-            var mcpOk = await probeReady(hit.url);
-            if (mcpOk) {
-                sawMcp = true;
-                var projOk = requireProject ? await probeProjectReady(hit.url) : true;
+            var bridgeOk = await probeReady(hit);
+            if (bridgeOk) {
+                sawBridge = true;
+                var projOk = requireProject ? await probeProjectReady(hit) : true;
                 if (projOk) {
                     return {
-                        ready: true, mcpReady: true, projectReady: projOk,
+                        ready: true, bridgeReady: true, projectReady: projOk,
                         entry: {
                             shortName: sanitize(hit.projectShortName),
                             pid: hit.pid, url: hit.url, port: hit.port,
@@ -571,18 +551,18 @@ async function waitReady(projectPath, opts) {
                         waitedMs: Date.now() - start,
                     };
                 }
-                lastReason = 'MCP up (pid=' + hit.pid + ') 但 asset-db 未就绪，可能卡在 Cocos Developer Login 或项目加载中';
+                lastReason = 'Bridge up (pid=' + hit.pid + ') 但 asset-db 未就绪，可能卡在 Cocos Developer Login 或项目加载中';
             } else {
-                lastReason = 'registered (pid=' + hit.pid + ') but MCP server not responding yet';
+                lastReason = 'registered (pid=' + hit.pid + ') but Editor Bridge not responding yet';
             }
         } else {
             lastReason = 'no fresh registry entry for project yet (editor still booting)';
         }
         await sleep(1000);
     }
-    var res = { ready: false, mcpReady: sawMcp, projectReady: false, reason: lastReason, waitedMs: Date.now() - start };
-    if (sawMcp) {
-        res.hint = '⚠️ MCP server 起来了但项目没就绪。若是 router 拉起/重启编辑器，请确认 spawnArgs 包含 --nologin；若是手动拉起，可能卡在 Cocos Developer Login 或仍在加载项目。';
+    var res = { ready: false, bridgeReady: sawBridge, projectReady: false, reason: lastReason, waitedMs: Date.now() - start };
+    if (sawBridge) {
+        res.hint = '⚠️ Editor Bridge 起来了但项目没就绪。若是 Gateway 拉起/重启编辑器，请确认 spawnArgs 包含 --nologin；若是手动拉起，可能卡在 Cocos Developer Login 或仍在加载项目。';
     }
     return res;
 }
@@ -619,7 +599,7 @@ var EDITOR_TOOLS = [
     },
     {
         name: 'editor_wait_ready',
-        description: '[editor] 等指定项目的 Cocos 编辑器就绪（注册文件出现且 MCP server 能 initialize）。' +
+        description: '[editor] 等指定项目的 Cocos 编辑器就绪（注册文件出现且 Editor Bridge 可探活）。' +
             '用于「拉起编辑器后等它起来再操作」。已就绪则立即返回。' +
             '编辑器尚未运行时必须传 projectPath（空注册表无法从 shortName 反推路径）。',
         inputSchema: {

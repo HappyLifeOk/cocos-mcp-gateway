@@ -1,15 +1,15 @@
 {
-  "name": "cocos-mcp",
-  "version": "0.2.0",
-  "description": "Global MCP router and offline Prefab CLI for Cocos Creator projects.",
+  "name": "cocos-mcp-gateway",
+  "version": "0.3.0",
+  "description": "Global MCP Gateway, Editor Bridge installer, and offline Prefab CLI for Cocos Creator projects.",
   "license": "Apache-2.0",
   "author": "付饶",
   "repository": {
     "type": "git",
-    "url": "https://gitee.com/Fu_Rao/cocos-mcp.git"
+    "url": "https://gitee.com/Fu_Rao/cocos-mcp-gateway.git"
   },
   "bin": {
-    "cocos-mcp-router": "./runtime/router/bin.js",
+    "cocos-mcp-gateway": "./runtime/router/bin.js",
     "cocos-mcp-cli": "./runtime/cli/bin/cocos-mcp-cli.js",
     "cocos-mcp-connect": "./scripts/connect-project.js",
     "cocos-mcp-setup-claude": "./scripts/setup-claude.js"

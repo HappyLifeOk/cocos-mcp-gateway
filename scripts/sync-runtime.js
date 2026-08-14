@@ -42,11 +42,11 @@ fs.cpSync(source, extensionTarget, {
   recursive: true,
   filter(item) {
     const name = path.basename(item);
-    return name !== '.git' && name !== '.gitmodules' && name !== 'test';
+    return name !== '.git' && name !== '.gitmodules' && name !== 'mcp-sdk' && name !== 'test';
   },
 });
 
-for (const name of ['LICENSE', 'NOTICE']) {
+for (const name of ['LICENSE']) {
   const from = path.join(source, name);
   if (fs.existsSync(from)) {
     fs.copyFileSync(from, path.join(pluginRoot, name));

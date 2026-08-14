@@ -1,12 +1,12 @@
 {
   "package_version": 2,
-  "version": "2.1.0",
+  "version": "3.0.0",
   "name": "cc-3-8-x-mcp",
-  "title": "Cocos Creator 3.8.x MCP Server",
-  "description": "把 Cocos Creator 3.8.x 编辑器能力（scene/asset-db/preview/local）以 MCP 协议暴露给外部 AI 客户端；兼容原 dev-reload 信号文件通道",
+  "title": "CC 3.8.x MCP Editor Bridge",
+  "description": "把 Cocos Creator 3.8.x 编辑器能力通过私有本机 Bridge 接入全局 cocos-mcp-gateway；兼容原 dev-reload 信号文件通道",
   "license": "Apache-2.0",
   "author": "付饶",
-  "editor": ">=3.8.0",
+  "editor": ">=3.8.0 <3.9.0",
   "main": "./main.js",
   "panels": {
     "default": {
@@ -30,15 +30,15 @@
       },
       {
         "path": "i18n:menu.extension/Cocos MCP",
-        "label": "重启 MCP Server",
-        "message": "restart-server"
+        "label": "重启 Editor Bridge",
+        "message": "restart-bridge"
       }
     ],
     "messages": {
       "open-panel": { "methods": ["openPanel"] },
-      "restart-server": { "methods": ["restartServer"] },
+      "restart-bridge": { "methods": ["restartBridge"] },
+      "get-bridge-config": { "methods": ["getBridgeConfig"] },
       "get-status": { "methods": ["getStatus"] },
-      "get-mcp-config": { "methods": ["getMcpConfig"] },
       "refresh-assets": { "methods": ["refreshAssets"] },
       "query-preview-url": { "methods": ["queryPreviewUrl"] },
       "trigger-refresh": { "methods": ["triggerRefresh"] },

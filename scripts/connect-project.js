@@ -24,22 +24,56 @@ for (const required of ['assets', 'settings', 'package.json']) {
   }
 }
 
+let creatorVersion = '';
+try {
+  const projectPackage = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+  creatorVersion = projectPackage.creator && typeof projectPackage.creator.version === 'string'
+    ? projectPackage.creator.version
+    : '';
+} catch (error) {
+  fail(`无法读取项目 Creator 版本: ${error.message}`);
+}
+if (!creatorVersion.startsWith('3.8.')) {
+  fail(`cc-3-8-x-mcp 只支持 Cocos Creator 3.8.x，当前项目版本: ${creatorVersion || 'unknown'}`);
+}
+
 const pluginRoot = path.resolve(__dirname, '..');
 const snapshot = path.join(pluginRoot, 'extension');
-const target = path.join(projectRoot, 'extensions', 'cc-3-8-x-mcp');
+const extensionsRoot = path.join(projectRoot, 'extensions');
+const target = path.join(extensionsRoot, 'cc-3-8-x-mcp');
+
+function findInstalledExtension() {
+  if (!fs.existsSync(extensionsRoot)) return '';
+  for (const entry of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const candidate = path.join(extensionsRoot, entry.name);
+    const manifest = path.join(candidate, 'package.json');
+    try {
+      const data = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+      if (data.name === 'cc-3-8-x-mcp') return candidate;
+    } catch (error) {
+      // 不是目标 Cocos 扩展，继续扫描。
+    }
+  }
+  return '';
+}
 
 if (!fs.existsSync(path.join(snapshot, 'package.json')) ||
     !fs.existsSync(path.join(snapshot, 'main.js'))) {
   fail(`共享扩展快照不完整: ${snapshot}`);
 }
 
-if (fs.existsSync(target)) {
-  if (!fs.existsSync(path.join(target, 'package.json')) ||
-      !fs.existsSync(path.join(target, 'main.js'))) {
-    fail(`目标目录已存在但不是有效扩展，拒绝覆盖: ${target}`);
+const installedExtension = findInstalledExtension();
+if (installedExtension) {
+  if (!fs.existsSync(path.join(installedExtension, 'main.js'))) {
+    fail(`已安装扩展缺少 main.js: ${installedExtension}`);
   }
-  process.stdout.write(`项目已接入 Cocos MCP，未覆盖现有扩展:\n  ${target}\n`);
+  process.stdout.write(`项目已接入 Cocos MCP 3.8.x Editor Bridge，未覆盖现有扩展:\n  ${installedExtension}\n`);
   process.exit(0);
+}
+
+if (fs.existsSync(target)) {
+  fail(`目标目录已存在但不是 cc-3-8-x-mcp，拒绝覆盖: ${target}`);
 }
 
 if (dryRun) {

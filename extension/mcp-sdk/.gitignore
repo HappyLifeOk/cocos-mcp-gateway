@@ -1,9 +1,0 @@
-# 依赖与构建产物
-node_modules/
-
-# 临时与本机产物
-.dev/
-.DS_Store
-*.log
-*.bak
-*.bak.*

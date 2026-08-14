@@ -1,7 +1,7 @@
 {
   "name": "cocos-mcp",
-  "version": "0.2.0+codex.20260814024928",
-  "description": "\u5728 Codex \u4e2d\u7edf\u4e00\u53d1\u73b0\u3001\u8fde\u63a5\u548c\u63a7\u5236\u672c\u673a\u591a\u4e2a Cocos Creator \u9879\u76ee\uff0c\u5e76\u63d0\u4f9b\u79bb\u7ebf Prefab CLI\u3002",
+  "version": "0.3.0+codex.20260814040508",
+  "description": "\u4f5c\u4e3a\u552f\u4e00\u5168\u5c40 MCP Gateway\uff0c\u5728 Codex \u4e2d\u53d1\u73b0\u548c\u63a7\u5236\u672c\u673a\u591a\u4e2a Cocos Creator Editor Bridge\uff0c\u5e76\u63d0\u4f9b\u79bb\u7ebf Prefab CLI\u3002",
   "author": {
     "name": "\u4ed8\u9976"
   },
@@ -14,13 +14,14 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Cocos MCP",
-    "shortDescription": "\u8fde\u63a5\u5e76\u63a7\u5236\u672c\u673a\u591a\u4e2a Cocos Creator \u9879\u76ee",
-    "longDescription": "\u901a\u8fc7\u4e00\u4e2a\u5168\u5c40 MCP router \u52a8\u6001\u53d1\u73b0\u5404\u9879\u76ee\u4e2d\u7684 Cocos Creator \u7f16\u8f91\u5668\u6269\u5c55\uff0c\u63d0\u4f9b\u573a\u666f\u3001\u8d44\u6e90\u3001\u9884\u89c8\u3001\u7f16\u8f91\u5668\u751f\u547d\u5468\u671f\u4ee5\u53ca\u79bb\u7ebf Prefab \u64cd\u4f5c\u80fd\u529b\u3002",
+    "displayName": "Cocos MCP Gateway",
+    "shortDescription": "\u7edf\u4e00\u8fde\u63a5\u591a\u4e2a Cocos Creator Editor Bridge",
+    "longDescription": "\u4f5c\u4e3a\u552f\u4e00 MCP Server\uff0c\u52a8\u6001\u53d1\u73b0\u5404\u9879\u76ee\u4e2d\u7684\u8f7b\u91cf Cocos Creator Editor Bridge\uff0c\u63d0\u4f9b\u573a\u666f\u3001\u8d44\u6e90\u3001\u9884\u89c8\u3001\u7f16\u8f91\u5668\u751f\u547d\u5468\u671f\u4ee5\u53ca\u79bb\u7ebf Prefab \u64cd\u4f5c\u80fd\u529b\u3002",
     "developerName": "\u4ed8\u9976",
     "category": "Developer Tools",
     "capabilities": [
-      "Local MCP",
+      "MCP Gateway",
+      "Editor Bridge",
       "Cocos Creator",
       "Prefab CLI"
     ],

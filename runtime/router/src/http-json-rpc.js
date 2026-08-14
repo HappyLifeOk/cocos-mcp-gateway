@@ -2,7 +2,6 @@
 
 const http = require('http');
 
-const DOWNSTREAM_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26'];
 const DEFAULT_PROBE_TIMEOUT_MS = 8000;
 const DEFAULT_TOOL_TIMEOUT_MS = 60000;
 const DEFAULT_LONG_TOOL_TIMEOUT_MS = 180000;
@@ -18,7 +17,7 @@ const PROBE_TIMEOUT_MS = positiveEnvInt('COCOS_MCP_PROBE_TIMEOUT_MS', DEFAULT_PR
 const TOOL_TIMEOUT_MS = positiveEnvInt('COCOS_MCP_TOOL_TIMEOUT_MS', DEFAULT_TOOL_TIMEOUT_MS);
 const LONG_TOOL_TIMEOUT_MS = positiveEnvInt('COCOS_MCP_LONG_TOOL_TIMEOUT_MS', DEFAULT_LONG_TOOL_TIMEOUT_MS);
 
-function isLoopbackMcpUrl(rawUrl) {
+function isLoopbackUrl(rawUrl, expectedPath) {
     try {
         const parsed = new URL(rawUrl);
         const host = parsed.hostname.toLowerCase();
@@ -27,12 +26,16 @@ function isLoopbackMcpUrl(rawUrl) {
         return parsed.protocol === 'http:'
             && isLoopback
             && Number.isInteger(port) && port > 0 && port <= 65535
-            && parsed.pathname === '/mcp'
+            && parsed.pathname === expectedPath
             && !parsed.username && !parsed.password
             && !parsed.search && !parsed.hash;
     } catch (e) {
         return false;
     }
+}
+
+function isLoopbackBridgeUrl(rawUrl) {
+    return isLoopbackUrl(rawUrl, '/bridge');
 }
 
 function isPidAlive(pid) {
@@ -47,49 +50,35 @@ function isPidAlive(pid) {
 
 function validateRegistryEntry(info) {
     if (!info || typeof info !== 'object') return 'registry entry must be an object';
-    if (!isLoopbackMcpUrl(info.url)) return 'endpoint must be http://loopback:<port>/mcp';
     if (!isPidAlive(info.pid)) return 'editor pid is not alive';
     if (typeof info.projectPath !== 'string' || !info.projectPath) return 'projectPath is required';
     if (typeof info.projectShortName !== 'string' || !info.projectShortName) return 'projectShortName is required';
-    if (Number(info.gatewayApiVersion || 0) >= 1 && !/^[0-9a-f]{64}$/i.test(info.authToken || '')) {
-        return 'gateway v1 authToken must be a 32-byte hex token';
-    }
+    if (info.transport !== 'editor-bridge') return 'transport must be editor-bridge';
+    if (!isLoopbackBridgeUrl(info.url)) return 'editor-bridge endpoint must be http://loopback:<port>/bridge';
+    if (Number(info.gatewayApiVersion || 0) < 2) return 'editor-bridge requires gatewayApiVersion >= 2';
+    if (Number(info.bridgeApiVersion || 0) !== 1) return 'unsupported bridgeApiVersion';
+    if (!/^[0-9a-f]{64}$/i.test(info.authToken || '')) return 'editor-bridge authToken must be a 32-byte hex token';
     return null;
 }
 
-function selectProtocolVersion(info) {
-    const advertised = info && Array.isArray(info.mcpProtocolVersions)
-        ? info.mcpProtocolVersions
-        : DOWNSTREAM_PROTOCOL_VERSIONS;
-    return DOWNSTREAM_PROTOCOL_VERSIONS.find((version) => advertised.includes(version)) || null;
-}
-
-function routingName(body) {
-    return body && body.params && (body.params.name || body.params.uri);
-}
-
-function httpJsonRpc(targetUrl, body, options) {
+function bridgeJsonRpc(targetUrl, body, options) {
     options = options || {};
     const timeoutMs = options.timeoutMs || PROBE_TIMEOUT_MS;
-    const protocolVersion = options.protocolVersion || DOWNSTREAM_PROTOCOL_VERSIONS[0];
 
     return new Promise(function (resolve, reject) {
         try {
-            if (!isLoopbackMcpUrl(targetUrl)) {
-                reject(new Error('refusing non-loopback MCP endpoint'));
+            if (!isLoopbackBridgeUrl(targetUrl)) {
+                reject(new Error('refusing invalid loopback Editor Bridge endpoint'));
                 return;
             }
             const u = new URL(targetUrl);
             const data = JSON.stringify(body);
             const headers = {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json, text/event-stream',
+                'Accept': 'application/json',
                 'Content-Length': Buffer.byteLength(data),
-                'MCP-Protocol-Version': protocolVersion,
-                'Mcp-Method': body.method || '',
+                'X-Cocos-Bridge-Version': '1',
             };
-            const name = routingName(body);
-            if (name) headers['Mcp-Name'] = String(name);
             if (options.authToken) headers.Authorization = 'Bearer ' + options.authToken;
 
             const req = http.request({
@@ -105,7 +94,7 @@ function httpJsonRpc(targetUrl, body, options) {
                 res.on('end', function () {
                     const raw = Buffer.concat(chunks).toString('utf-8');
                     if (res.statusCode < 200 || res.statusCode >= 300) {
-                        reject(new Error('HTTP ' + res.statusCode + ' from MCP endpoint: ' + raw.slice(0, 160)));
+                        reject(new Error('HTTP ' + res.statusCode + ' from Editor Bridge endpoint: ' + raw.slice(0, 160)));
                         return;
                     }
                     try { resolve(JSON.parse(raw)); }
@@ -127,14 +116,13 @@ function toolTimeoutMs(name) {
 }
 
 module.exports = {
-    DOWNSTREAM_PROTOCOL_VERSIONS,
     PROBE_TIMEOUT_MS,
     TOOL_TIMEOUT_MS,
     LONG_TOOL_TIMEOUT_MS,
-    isLoopbackMcpUrl,
+    isLoopbackUrl,
+    isLoopbackBridgeUrl,
     isPidAlive,
     validateRegistryEntry,
-    selectProtocolVersion,
-    httpJsonRpc,
+    bridgeJsonRpc,
     toolTimeoutMs,
 };

@@ -1,19 +1,19 @@
 'use strict';
 
 // Cocos MCP 功能面板
-// MCP 状态 / 编辑器状态 / 快捷动作 / Debug 注入 / 命令日志 / 同机 worktree
+// Editor Bridge 状态 / 编辑器状态 / 快捷动作 / 命令日志 / 同机 worktree
 
 exports.template = /* html */ `
 <div class="wrap">
   <section class="mcp">
-    <header>MCP Server <span id="mcpDot" class="dot gray"></span></header>
+    <header>Editor Bridge <span id="mcpDot" class="dot gray"></span></header>
     <div class="row"><label>状态</label><span id="mcpRunning">-</span></div>
     <div class="row"><label>端点</label><span id="mcpUrl">-</span></div>
     <div class="row"><label>Tools</label><span id="mcpTools">-</span></div>
     <div class="row"><label>请求数</label><span id="mcpReqCount">0</span></div>
     <div class="mcp-actions">
-      <ui-button id="btnCopyMcpUrl">复制连接配置</ui-button>
-      <ui-button id="btnCopyCli">复制 CLI 命令</ui-button>
+      <ui-button id="btnCopyMcpUrl">复制诊断信息</ui-button>
+      <ui-button id="btnCopyCli">复制客户端入口</ui-button>
       <ui-button id="btnRestartMcp" class="secondary">重启</ui-button>
     </div>
   </section>
@@ -154,11 +154,11 @@ exports.methods = {
             const w = s.watchers || {};
             this.$.watchers.textContent =
                 (w.refresh ? '●refresh ' : '○refresh ') +
-                (w.infoInterval ? '●info' : '○info');
+                (w.registryHeartbeat ? '●registry' : '○registry');
             this.$.updatedAt.textContent = s.updatedAt ? s.updatedAt.replace('T', ' ').replace(/\..+$/, '') : '-';
 
-            // MCP 区
-            const mcp = s.mcpServer || {};
+            // Editor Bridge 区
+            const mcp = s.editorBridge || {};
             if (mcp.running) {
                 this.$.mcpDot.className = 'dot green';
                 this.$.mcpRunning.textContent = 'running';
@@ -210,9 +210,9 @@ exports.methods = {
             }
             this.$.worktreeList.innerHTML = list.map(w => {
                 const name = (w.projectName || w.projectPath || '').split('/').slice(-2).join('/');
-                const stale = w.staleSec > 90 ? ` ⚠${w.staleSec}s` : '';
+                const offline = w.alive === false ? ' ⚠offline' : '';
                 const selfCls = w.self ? 'wt-row self' : 'wt-row';
-                return `<div class="${selfCls}"><span class="name">${escapeHtml(name)}${w.self ? ' (本)' : ''}</span><span class="port">:${w.previewPort || '?'} pid${w.editorPid}${stale}</span></div>`;
+                return `<div class="${selfCls}"><span class="name">${escapeHtml(name)}${w.self ? ' (本)' : ''}</span><span class="port">:${w.previewPort || '?'} pid${w.editorPid}${offline}</span></div>`;
             }).join('');
         } catch (e) { /* ignore */ }
     },
@@ -256,25 +256,25 @@ exports.methods = {
     },
     async onCopyMcpUrl() {
         try {
-            const cfg = await Editor.Message.request('cc-3-8-x-mcp', 'get-mcp-config');
-            if (!cfg || !cfg.connectionConfig) { this.showToast('MCP 未运行'); return; }
-            await navigator.clipboard.writeText(JSON.stringify(cfg.connectionConfig, null, 2));
-            this.showToast('已复制带鉴权头的连接配置');
+            const cfg = await Editor.Message.request('cc-3-8-x-mcp', 'get-bridge-config');
+            if (!cfg || !cfg.running) { this.showToast('Editor Bridge 未运行'); return; }
+            await navigator.clipboard.writeText(JSON.stringify(cfg, null, 2));
+            this.showToast('已复制 Bridge 诊断信息（不含令牌）');
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
     async onCopyCli() {
         try {
-            const cfg = await Editor.Message.request('cc-3-8-x-mcp', 'get-mcp-config');
-            if (!cfg || !cfg.cliAddCommand) { this.showToast('MCP 未运行'); return; }
-            await navigator.clipboard.writeText(cfg.cliAddCommand);
-            this.showToast('已复制 CLI 命令');
+            const cfg = await Editor.Message.request('cc-3-8-x-mcp', 'get-bridge-config');
+            if (!cfg || !cfg.clientEntry) { this.showToast('Editor Bridge 未运行'); return; }
+            await navigator.clipboard.writeText(cfg.clientEntry);
+            this.showToast('客户端只需连接 cocos-mcp-gateway');
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
     async onRestartMcp() {
-        this.showToast('重启 MCP…');
+        this.showToast('重启 Bridge…');
         try {
-            await Editor.Message.request('cc-3-8-x-mcp', 'restart-server');
-            this.showToast('MCP 已重启');
+            await Editor.Message.request('cc-3-8-x-mcp', 'restart-bridge');
+            this.showToast('Editor Bridge 已重启');
             this.refreshStatus();
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },

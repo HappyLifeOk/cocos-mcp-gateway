@@ -8,15 +8,17 @@ description: 连接和控制当前工作区对应的 Cocos Creator 项目。处�
 ## 绑定当前项目
 
 1. 从当前工作目录向上寻找同时包含 `assets/`、`settings/` 和 `package.json` 的项目根。
-2. 调用 `router_list_editors`，用规范化后的绝对 `projectPath` 精确匹配当前项目。不要只凭工具前缀或项目名猜实例。
+2. 调用 `gateway_list_editors`，用规范化后的绝对 `projectPath` 精确匹配当前项目。不要只凭工具前缀或项目名猜实例。
 3. 匹配后使用该实例的 `<shortName>__*` 工具。多个项目同时打开时只操作当前项目。
 4. 没有匹配实例时，读取项目 `package.json` 的 `creator.version`，调用 `editor_spawn`，显式传绝对 `projectPath` 和版本，再等待就绪。
-5. 项目缺少 `extensions/cc-3-8-x-mcp` 时：若用户要求接入项目，运行 `cocos-mcp-connect <项目绝对路径>`；若当前任务未授权安装扩展，则停止并说明缺失。
+5. `gateway_list_editors` 只应返回 `transport=editor-bridge`、`gatewayApiVersion>=2`、`bridgeApiVersion=1` 的实例；旧项目 `/mcp` 不受支持。
+6. Cocos Creator 3.8.x 项目缺少 `extensions/cc-3-8-x-mcp` 时：若用户要求接入项目，运行 `cocos-mcp-connect <项目绝对路径>`；若当前任务未授权安装扩展，则停止并说明缺失。非 3.8.x 项目不得安装此扩展。
 
 ## 选择入口
 
 - `.prefab`、`.anim` 的结构化查询与修改：优先使用全局 `prefab_query`、`prefab_edit`、`prefab_batch`；路径必须为绝对路径。
 - 场景运行态、AssetDB、预览和编辑器状态：使用当前项目带前缀的 MCP 工具。
+- 项目扩展的 `/bridge` 是 Gateway 私有协议；不要直接调用、不要把它注册成 MCP Server，也不要输出注册记录里的 token。
 - 浏览器中的真实交互：先用 MCP 获取预览 URL，再交给可用的浏览器工具。
 - 纯文本源码和文档：使用普通文件工具，不走 Prefab CLI。
 

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文是 `cc-3-8-x-mcp` 的 agent 使用规则。只写插件级规则；项目自己的预览参数、业务本地服地址、测试账号和验证步骤写在项目文档里。
+本文是 `cc-3-8-x-mcp` 的 agent 使用规则。它只支持 Cocos Creator 3.8.x；项目自己的预览参数、业务本地服地址、测试账号和验证步骤写在项目文档里。
 
 ## 允许入口
 
@@ -8,15 +8,14 @@
 
 | 入口 | 用途 |
 |---|---|
-| 当前项目 MCP 实例 | `scene` / `asset-db` / `preview` / `local` 域操作 |
-| 当前项目 HTTP MCP endpoint | 当前 agent 没注入 MCP tool 时的等价入口 |
+| 全局 `cocos-mcp-gateway` 注入的项目 tool | `scene` / `asset-db` / `preview` / `local` 域操作 |
 | `cocos-mcp-cli` offline 命令 | `.prefab` / `.anim` 文件查询和修改 |
 | Playwright / Chrome | 浏览器里真实游戏页面的交互验证 |
 | `.dev/refresh` 的 `restart-package` | 重启本扩展代码 |
 
-其它入口不作为本插件使用路径。项目文档可以补充项目自己的只读兜底信息，但不能覆盖本文件的入口规则。
+项目扩展的 `/bridge` 是 Gateway 私有协议，agent 和其他 MCP 客户端不得直接调用、不得直接读取或复制注册记录中的 token。其它入口不作为本插件使用路径。
 
-## 绑定当前项目 MCP
+## 绑定当前项目
 
 同机可能同时打开多个 Cocos 项目。agent 必须先按项目根目录绑定 MCP 实例，再执行后续操作。
 
@@ -32,8 +31,9 @@
 2. 只保留 `projectPath` 与当前项目根目录一致的记录。
 3. 校验 `pid` 仍存活。
 4. 多个匹配时取 `updatedAt` 最新的记录。
-5. 后续所有 HTTP MCP 请求都使用该记录的 `url`、`authToken` 和双方都支持的最高 `mcpProtocolVersions`。
-6. `gatewayApiVersion >= 1` 时，缺失或格式不正确的 `authToken` 视为无效注册记录；token 不写日志、不贴到回复里。
+5. 只接受 `transport=editor-bridge`、`gatewayApiVersion>=2`、`bridgeApiVersion=1` 的记录。
+6. 后续操作只调用 Gateway 暴露的 `<project>__<tool>`，不直接请求记录中的 `/bridge` URL。
+7. 缺失或格式不正确的 `authToken` 视为无效注册记录；token 不写日志、不贴到回复里。
 
 快速确认脚本：
 
@@ -60,6 +60,10 @@ for path in glob.glob(os.path.expanduser('~/.cocos-mcp/editors/*.json')):
             data = json.load(f)
         if os.path.realpath(data.get('projectPath', '')) != os.path.realpath(PROJECT):
             continue
+        if data.get('transport') != 'editor-bridge':
+            continue
+        if data.get('gatewayApiVersion', 0) < 2 or data.get('bridgeApiVersion') != 1:
+            continue
         os.kill(int(data['pid']), 0)
         items.append((data.get('updatedAt', ''), path, data))
     except Exception:
@@ -70,9 +74,9 @@ for _, path, data in sorted(items)[-3:]:
 PY
 ```
 
-## Tool 与 HTTP MCP
+## Gateway Tool
 
-如果当前 agent 已注入 router 暴露的 MCP tool，使用带项目名前缀的 tool：
+使用 Gateway 暴露的带项目名前缀 tool：
 
 ```text
 forest__preview_query_url
@@ -80,22 +84,7 @@ forest__asset_reimport
 forest__preview_refresh_and_reload
 ```
 
-如果当前 agent 没注入这些 tool，按上节解析当前项目 MCP，再直接调用 HTTP endpoint。
-
-HTTP 调用格式：
-
-```bash
-curl -sS -X POST http://127.0.0.1:<mcp-port>/mcp \
-  -H "Authorization: Bearer ${MCP_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -H 'MCP-Protocol-Version: 2025-06-18' \
-  -H 'Mcp-Method: tools/call' \
-  -H 'Mcp-Name: preview_query_url' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"preview_query_url","arguments":{}}}'
-```
-
-`MCP_TOKEN` 只从已绑定的注册记录读入当前进程；不要 `echo`、不要写进仓库或持久 shell 配置。旧扩展没有 `gatewayApiVersion` 时允许无 token 连接，仅用于滚动升级兼容。
+如果当前 agent 没注入这些 tool，先修复或注册全局 `cocos-mcp-gateway`。禁止把项目 `/bridge` 当成 HTTP MCP fallback。
 
 ## 预览 URL
 
@@ -104,12 +93,12 @@ curl -sS -X POST http://127.0.0.1:<mcp-port>/mcp \
 | 来源 | 说明 |
 |---|---|
 | `preview_query_url` | 首选 |
-| `local_get_status` | 查预览端口、MCP endpoint、编辑器状态 |
-| 项目文档明确声明的只读兜底文件 | 仅在 MCP 不通时使用 |
+| `local_get_status` | 查预览端口、Bridge 状态、编辑器状态 |
+| 项目文档明确声明的只读兜底文件 | 仅在 Gateway 不通时使用 |
 
 没有项目文档声明时，不读取旧 `.dev/preview-url`，不猜 `localhost:7456`。
 
-浏览器验证必须在 MCP 返回的 URL 上追加唯一 `tid`：
+浏览器验证必须在 Gateway tool 返回的 URL 上追加唯一 `tid`：
 
 ```text
 <preview_url>/?tid=<unique-id>
@@ -119,7 +108,7 @@ curl -sS -X POST http://127.0.0.1:<mcp-port>/mcp \
 
 ## 资源修改后刷新
 
-offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefab` / `.anim` / `.json` 等资源后，使用当前项目 MCP 刷新：
+offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefab` / `.anim` / `.json` 等资源后，使用当前项目 Gateway tool 刷新：
 
 | 修改范围 | 后续动作 |
 |---|---|
@@ -147,7 +136,7 @@ offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefa
 
 ## 浏览器验证
 
-MCP 负责拿 URL、重导资源、刷新预览；浏览器里真实业务页面的交互验证交给 Playwright / Chrome。
+Gateway tool 负责拿 URL、重导资源、刷新预览；浏览器里真实业务页面的交互验证交给 Playwright / Chrome。
 
 推荐流程：
 
@@ -164,6 +153,6 @@ browser_take_screenshot
 
 1. 没有匹配 `projectPath` 的注册文件：确认 Cocos 编辑器已打开当前项目，并且扩展已启用。
 2. `pid` 不存活：忽略该注册文件，等编辑器重新注册。
-3. HTTP MCP endpoint 不通：用 `.dev/refresh` 的 `restart-package` 重启扩展；仍不通就重启编辑器。
-4. MCP 返回的预览 URL 为空：确认编辑器预览已启动。
+3. Editor Bridge 不通：用 `.dev/refresh` 的 `restart-package` 重启扩展；仍不通就重启编辑器。
+4. Gateway tool 返回的预览 URL 为空：确认编辑器预览已启动。
 5. 工具行为异常或文档与实际不一致：反馈插件问题，由用户决定是否修插件本身。

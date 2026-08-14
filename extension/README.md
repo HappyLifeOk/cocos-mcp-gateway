@@ -1,8 +1,10 @@
 # cc-3-8-x-mcp
 
-Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
+Cocos Creator 3.8.x 专用的 Editor Bridge 扩展 + 离线 prefab 读写 CLI。
 
-把编辑器的 scene/asset/preview/local 能力通过本机 MCP 网关交给 Codex、Claude Code 等客户端；同时提供无需编辑器运行的 offline prefab 编辑能力，支持节点增删克隆与 stub 节点属性覆写。
+把编辑器的 scene/asset/preview/local 能力通过本机私有 Bridge 交给全局
+`cocos-mcp-gateway`；同时提供无需编辑器运行的 offline prefab 编辑能力。
+本扩展不是 MCP Server，不能被 Codex、Claude Code 或其他 MCP 客户端直接注册。
 
 ---
 
@@ -10,7 +12,7 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
 
 | 文档 | 内容 | 阅读时机 |
 |---|---|---|
-| [`AGENTS.md`](./AGENTS.md) | **Agent 使用规则**：多项目 MCP 绑定、HTTP fallback、预览 URL、CLI/MCP 分工 | agent 使用本插件前 |
+| [`AGENTS.md`](./AGENTS.md) | **Agent 使用规则**：Gateway 绑定、Editor Bridge、预览 URL、CLI/Gateway 分工 | agent 使用本插件前 |
 | [`QUICK-REF.md`](./QUICK-REF.md) | **一页速查表**：节点定位三式、场景 → op 对照、ops.json 速记、踩坑表 | agent 起手第一份，挑不到再翻 cli.md |
 | [`doc/cli.md`](./doc/cli.md) | **CLI 完整手册**：命令、26 个 op 全表、配方、已知坑、源码导航 | 改 `.prefab` / `.anim` 文件前必读 |
 | [`doc/prefab-schema.md`](./doc/prefab-schema.md) | CC3 prefab JSON 结构速查（节点 / 组件 / 引用字段格式） | 看不懂 prefab 字段时查 |
@@ -27,30 +29,50 @@ Codex / Claude Code / 其他 stdio MCP client
         │  stdio (JSON-RPC)
         ▼
 ┌─────────────────────────────┐
-│  全局 cocos-mcp plugin      │  ← Codex 注册入口
+│  全局 cocos-mcp-gateway     │  ← 唯一 MCP Server / Codex 注册入口
 │  runtime/router/bin.js      │  ← 聚合多个编辑器
 │  - 扫 ~/.cocos-mcp/editors/ │
 │  - offline prefab tools     │
 └───────────┬─────────────────┘
-            │  loopback HTTP MCP + Bearer token
+            │  私有 loopback JSON-RPC /bridge + Bearer token
     ┌───────┴────────┐
     │                │
     ▼                ▼
 编辑器实例 A      编辑器实例 B       ← 每个项目一个编辑器进程
-项目内 cc-3-8-x-mcp 扩展          ← 在 Cocos 编辑器进程内跑 HTTP MCP server
+项目内 cc-3-8-x-mcp             ← 在 Cocos Creator 3.8.x 进程内跑轻量 Editor Bridge
 ```
 
-职责边界：项目扩展是编辑器能力与 CLI 的源码真源；全局 `cocos-mcp` 只负责客户端注册、实例发现和同步快照。升级项目扩展后，用全局仓的 `scripts/sync-runtime.js` 同步，项目代码不依赖某台机器上的固定全局路径。
+职责边界：项目扩展只负责 `Editor.Message` 能力、Bridge 和 CLI；全局
+`cocos-mcp-gateway` 独占 MCP 协议、客户端注册、实例发现与多项目路由。
+`universal-mcp-sdk` 已从项目扩展运行链路移除。
 
-offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 router 进程内直接执行，调用 `cli/src/index.js`，不需要编辑器运行。
+offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 Gateway 进程内直接执行，调用 `cli/src/index.js`，不需要编辑器运行。
+
+## 3.0 架构升级
+
+`cc-3-8-x-mcp` 的名字保持不变，因为它仍然是 Cocos Creator 3.8.x 专用扩展；
+变化的是它在整套系统中的职责。
+
+| 对比项 | 旧版 | 3.0 |
+|---|---|---|
+| 客户端连接 | 客户端或全局 router 连接项目 `/mcp` | 客户端只连接全局 `cocos-mcp-gateway` |
+| 扩展职责 | 项目级 MCP Server + Editor.Message + CLI | 私有 Editor Bridge + Editor.Message + CLI |
+| MCP 协议 | 每个项目扩展都解析一遍 | 只由 Gateway 处理 |
+| 共享 SDK | 项目内带 `universal-mcp-sdk` 子库 | 已移除 |
+| Bridge 访问 | 项目 HTTP MCP endpoint 可被直接配置 | 仅允许 Gateway 通过 loopback 和随机 token 调用 |
+
+这意味着项目仓库更轻、客户端配置更稳定，MCP 兼容问题与 Cocos 编辑器问题也有了明确的排查边界。
+
+这是一次不兼容升级：旧 `/mcp` endpoint 和旧协议 fallback 均已移除。使用 3.0
+扩展时必须同时使用新版 `cocos-mcp-gateway`，并删除客户端中的项目级 MCP 配置。
 
 ---
 
 ## 三个组件
 
-### 1. 编辑器扩展（`main.js` + panel + server）
+### 1. 编辑器扩展（`main.js` + panel + `server/editor-bridge.js`）
 
-在 Cocos Creator 编辑器进程内运行。启动时拉起 `server/mcp-server.js`（HTTP MCP server），并把自身信息写入 `~/.cocos-mcp/editors/<pid>.json`（心跳注册）。
+在 Cocos Creator 编辑器进程内运行。启动时拉起轻量 Editor Bridge，并把自身信息写入 `~/.cocos-mcp/editors/<pid>.json`（心跳注册）。Bridge 只接受 Gateway 的本机鉴权请求。
 
 **暴露的 tool 域**：
 
@@ -61,25 +83,26 @@ offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 rou
 | preview | 预览地址查询、浏览器控制、截图、JS 注入 |
 | local | 本地状态、worktree 列表、.dev 目录管理 |
 
-### 2. stdio router（`router/`）
+### 2. 全局 MCP Gateway
 
-入口：`router/bin.js`
+源码与入口位于独立仓库 `cocos-mcp-gateway/runtime/router/bin.js`。
 
 **职责**：
 
 - 扫描 `~/.cocos-mcp/editors/` 发现活跃编辑器（心跳超 120s 视为已死）
-- 校验 PID、loopback endpoint、网关版本和协议版本；拒绝把请求转发到非本机地址
+- 只接受 `transport=editor-bridge`、Gateway API v2、Bridge API v1 的注册记录
+- 校验 PID、loopback `/bridge` endpoint 和随机 token；拒绝非本机地址
 - 从权限为 `0600` 的注册记录读取每个实例的随机 bearer token，不把 token 暴露在 tool 列表中
 - 每隔 15s 自动发现新实例
-- 给每个编辑器的 tool 加 `<shortName>__` 前缀，合并后暴露给 Claude Code
+- 给每个编辑器的 tool 加 `<shortName>__` 前缀，合并后暴露给 MCP 客户端
 - 内置 offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`），不带前缀，全局可用
 
 **tool 路由示例**：
 
 ```
-forest__scene_query_node_tree  →  forest 编辑器的 HTTP MCP server
-another__asset_query_assets    →  another 编辑器的 HTTP MCP server
-prefab_query                   →  router 本地执行（cli），无需编辑器
+forest__scene_query_node_tree  →  forest 编辑器的 Editor Bridge
+another__asset_query_assets    →  another 编辑器的 Editor Bridge
+prefab_query                   →  Gateway 本地执行（cli），无需编辑器
 ```
 
 ### 3. cocos-mcp-cli（`cli/`）
@@ -94,7 +117,7 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 
 | 区块 | 内容 |
 |---|---|
-| MCP Server | 运行状态指示灯 / 端点地址 / tool 数量 / 请求计数；复制带鉴权头的连接配置、复制 CLI 命令、重启 |
+| Editor Bridge | 运行状态指示灯 / 私有端点 / tool 数量 / 请求计数；复制不含令牌的诊断信息、查看客户端入口、重启 |
 | 编辑器状态 | 当前分支 / HEAD / 预览地址和端口 / 编辑器 PID / Watcher 状态 / 最后更新时间 |
 | 快捷动作 | 一键刷新（资源+场景+预览）/ 软重载场景 / 打开预览浏览器 / 截图 / 打开 .dev 目录 / 清理临时文件 / 手动输入路径重新导入 |
 | Debug 注入 | 在预览页面执行任意 JS（`eval_js`），结果直接展示；自定义快捷按钮（配置见下方） |
@@ -160,7 +183,7 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | `local_open_dev_dir` | 在 Finder 中打开 .dev 目录 |
 | `local_clean_dev_dir` | 清理 .dev 临时文件 |
 
-### offline 域（router 级，无需编辑器运行）
+### offline 域（Gateway 级，无需编辑器运行）
 
 | Tool | 说明 |
 |---|---|
@@ -170,7 +193,7 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 
 完整 op 列表与配方见 [`doc/cli.md`](./doc/cli.md)。
 
-> offline tools 的 `filePath` 和 `opsJsonPath` 必须为绝对路径；router 以 stdio 模式运行，cwd 不确定，相对路径有歧义。
+> offline tools 的 `filePath` 和 `opsJsonPath` 必须为绝对路径；Gateway 以 stdio 模式运行，cwd 不确定，相对路径有歧义。
 
 ---
 
@@ -181,43 +204,38 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 ```json
 {
   "pid": 12345,
-  "url": "http://127.0.0.1:7788/mcp",
+  "url": "http://127.0.0.1:7788/bridge",
+  "transport": "editor-bridge",
   "projectShortName": "forest",
   "projectPath": "/path/to/project",
-  "extensionVersion": "2.1.0",
-  "gatewayApiVersion": 1,
-  "mcpProtocolVersions": ["2025-06-18", "2025-03-26"],
+  "extensionVersion": "3.0.0",
+  "gatewayApiVersion": 2,
+  "bridgeApiVersion": 1,
   "authToken": "<64 hex chars>"
 }
 ```
 
-注册目录权限为 `0700`，记录以原子写入方式更新且权限为 `0600`。router 定期扫此目录，心跳超过 120s 的记录视为死亡自动剔除。tool 名以 `<shortName>__` 为前缀隔离，同机多开不冲突。
+注册目录权限为 `0700`，记录以原子写入方式更新且权限为 `0600`。Gateway 定期扫此目录，心跳超过 120s 的记录视为死亡自动剔除。tool 名以 `<shortName>__` 为前缀隔离，同机多开不冲突。
 
 ---
 
-## 接入 Claude Code
-
-> ⚠️ 本仓库通过 git submodule 依赖 [universal-mcp-sdk](https://github.com/HappyLifeOk/universal-mcp-sdk)，clone 后**必须先拉 submodule**，否则 MCP server 起不来：
->
-> ```bash
-> git submodule update --init --recursive
-> ```
+## 接入 MCP 客户端
 
 ```bash
-claude mcp add cocos -- node /path/to/cc-3-8-x-mcp/router/bin.js
+claude mcp add cocos -- node /path/to/cocos-mcp-gateway/runtime/router/bin.js
 ```
 
-接入后 Claude Code 即可调用所有活跃编辑器的 tool，以及全局 offline prefab tools。
+客户端只注册全局 `cocos-mcp-gateway`。不要注册项目扩展的 `/bridge`；它不是 MCP endpoint。
 
-Codex 使用全局 `cocos-mcp` plugin 的 `.mcp.json` 启动同一个 stdio router。不要把某个项目的临时 HTTP endpoint 直接注册成全局 Codex MCP；endpoint 会随编辑器进程和端口变化。
+Codex 使用全局 `cocos-mcp` plugin 的 `.mcp.json` 启动同一个 stdio Gateway。不要把某个项目的私有 Bridge endpoint 直接注册成全局 Codex MCP；它不是 MCP endpoint，而且会随编辑器进程和端口变化。
 
-## 网关兼容与安全
+## Bridge 与 Gateway 安全边界
 
-- router 对客户端使用 MCP `2025-06-18`；连接项目扩展时优先协商 `2025-06-18`，滚动升级期间可回退 `2025-03-26`。
-- 项目 HTTP server 只监听 loopback，所有 MCP GET/POST 都要求每次启动随机生成的 bearer token。
-- 浏览器请求默认不允许任何 `Origin`；确有嵌入式浏览器需求时必须显式配置 allowlist。
-- POST 只接受 `application/json`，默认 body 上限 4 MiB，并校验 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name`（后两者传入时）。
-- router 为探活、普通 tool 和资源/刷新/场景类长操作使用分级超时，避免固定短超时误杀 Cocos 长任务。
+- MCP `initialize`、tools/resources 聚合和客户端兼容只存在于 Gateway。
+- 项目 Bridge 只监听 loopback，所有 `/bridge` POST 都要求进程级随机 bearer token。
+- Bridge 拒绝浏览器 `Origin`，只接受 `application/json`，默认 body 上限 4 MiB。
+- Gateway 只接受 API v2/v1 的 Editor Bridge，不兼容旧项目 `/mcp` Server；所有项目必须统一升级。
+- Gateway 为探活、普通 tool 和资源/刷新/场景类长操作使用分级超时。
 
 ---
 
@@ -231,7 +249,7 @@ Codex 使用全局 `cocos-mcp` plugin 的 `.mcp.json` 启动同一个 stdio rout
 echo "restart-package" > .dev/refresh
 ```
 
-面板上的「重启 MCP Server」按钮只重启 HTTP server 实例，Node require 缓存不动，**改不到 main.js 的代码改动**。`restart-package` 走 `Editor.Package.disable + enable`，整个扩展沙箱重建，所有 JS 重新 require。注意命令是 fire-and-forget，不返回结果；扩展重启过程中 MCP 连接会短暂中断（≈1-2s），重连由 router 自动发现完成。
+面板上的「重启 Editor Bridge」按钮只重启 Bridge 实例，Node require 缓存不动，**改不到 main.js 的代码改动**。`restart-package` 走 `Editor.Package.disable + enable`，整个扩展沙箱重建，所有 JS 重新 require。注意命令是 fire-and-forget，不返回结果；扩展重启过程中 Gateway 路由会短暂中断（≈1-2s），随后自动重新发现。
 
 ---
 

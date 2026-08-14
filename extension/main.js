@@ -3,13 +3,14 @@
 var fs = require('fs');
 var path = require('path');
 var { exec } = require('child_process');
+var localStatus = require('./server/local-status');
 
 var DEV_DIR = '.dev';
 
 // 缓存预览地址
 var _previewUrl = '';
-// 定时刷新 dev-reload-info.json 的 interval handle
-var _infoInterval = null;
+// Gateway 注册心跳 interval handle；不再周期性重写 dev-reload-info.json
+var _registryHeartbeatInterval = null;
 // `.dev/refresh` 命令文件 watcher（唯一保留的 watcher）
 var _refreshWatcher = null;
 
@@ -35,7 +36,7 @@ function pushCommandLog(source, cmd) {
  * @param {string} previewUrl  已知的预览 URL（非空）
  */
 function writeDevReloadInfo(previewUrl) {
-    if (!previewUrl) return;
+    if (!previewUrl) return false;
     var portMatch = previewUrl.match(/:(\d+)/);
     var previewPort = portMatch ? parseInt(portMatch[1], 10) : null;
     // 读取项目名（package.json name 字段）
@@ -54,37 +55,47 @@ function writeDevReloadInfo(previewUrl) {
         editorVersion: (Editor.App && Editor.App.version) ? Editor.App.version : '',
         previewUrl: previewUrl,
         previewPort: previewPort,
-        updatedAt: new Date().toISOString(),
     };
     try {
         var devDir = path.join(Editor.Project.path, DEV_DIR);
         if (!fs.existsSync(devDir)) {
             fs.mkdirSync(devDir, { recursive: true });
         }
+        var infoPath = path.join(Editor.Project.path, INFO_FILE);
+        if (fs.existsSync(infoPath)) {
+            try {
+                var previous = JSON.parse(fs.readFileSync(infoPath, 'utf-8'));
+                if (localStatus.isSameDevReloadInfo(previous, info)) return false;
+            } catch (e) { /* 文件损坏时覆盖重写 */ }
+        }
+        info.updatedAt = new Date().toISOString();
         fs.writeFileSync(
-            path.join(Editor.Project.path, INFO_FILE),
+            infoPath,
             JSON.stringify(info, null, 2),
             'utf-8'
         );
         log('dev-reload-info.json updated — port:' + (previewPort || 'null'));
+        return true;
     } catch (e) {
         console.warn('[dev-reload] writeDevReloadInfo failed:', e.message || e);
+        return false;
     }
 }
 
-/** 启动 30s 定时刷新，保持 updatedAt 活跃供外部 stale 检测 */
-function startInfoInterval() {
-    if (_infoInterval) clearInterval(_infoInterval);
-    _infoInterval = setInterval(function () {
-        if (_previewUrl) writeDevReloadInfo(_previewUrl);
-        // 顺便刷 registry，让 router 判活
+/** 启动 30s Gateway 注册心跳；预览信息由启动/主动查询触发检查，仅实际变化时写入 */
+function startRegistryHeartbeat() {
+    if (_registryHeartbeatInterval) clearInterval(_registryHeartbeatInterval);
+    _registryHeartbeatInterval = setInterval(function () {
         if (typeof writeRegistry === 'function') writeRegistry();
     }, 30000);
 }
 
-/** 停止定时刷新 */
-function stopInfoInterval() {
-    if (_infoInterval) { clearInterval(_infoInterval); _infoInterval = null; }
+/** 停止 Gateway 注册心跳 */
+function stopRegistryHeartbeat() {
+    if (_registryHeartbeatInterval) {
+        clearInterval(_registryHeartbeatInterval);
+        _registryHeartbeatInterval = null;
+    }
 }
 
 function log(msg) {
@@ -166,41 +177,13 @@ exports.methods = {
     async openPanel() {
         await Editor.Panel.open('cc-3-8-x-mcp');
     },
-    async restartServer() {
-        await stopMcpServer();
-        await startMcpServer();
-        return { port: _mcpServer ? _mcpServer.port : null };
+    async restartBridge() {
+        await stopEditorBridge();
+        await startEditorBridge();
+        return { port: _editorBridge ? _editorBridge.port : null };
     },
-    async getMcpConfig() {
-        if (!_mcpServer) return { running: false };
-        var url = 'http://' + _mcpServer.host + ':' + _mcpServer.port + '/mcp';
-        var authorization = 'Bearer ' + _mcpServer.authToken;
-        return {
-            running: _mcpServer.started,
-            url: url,
-            port: _mcpServer.port,
-            host: _mcpServer.host,
-            toolCount: _mcpServer.toolCount,
-            resourceCount: _mcpServer.resourceCount,
-            stats: _mcpServer.stats,
-            // Claude Code 的 mcp add 命令
-            cliAddCommand: 'claude mcp add --transport http cocos ' + url + ' --header "Authorization: ' + authorization + '"',
-            connectionConfig: {
-                transport: 'http',
-                url: url,
-                headers: { Authorization: authorization },
-            },
-            // JSON 配置片段
-            jsonConfig: {
-                mcpServers: {
-                    cocos: {
-                        transport: 'http',
-                        url: url,
-                        headers: { Authorization: authorization },
-                    },
-                },
-            },
-        };
+    async getBridgeConfig() {
+        return buildBridgeConfig();
     },
     /** Panel 使用：刷新资源 + 重载场景 */
     async triggerRefresh() {
@@ -282,7 +265,6 @@ exports.methods = {
                 if (!fs.existsSync(infoPath)) return;
                 try {
                     var info = JSON.parse(fs.readFileSync(infoPath, 'utf-8'));
-                    var ageMs = Date.now() - new Date(info.updatedAt).getTime();
                     results.push({
                         projectPath: info.projectPath,
                         projectName: info.projectName,
@@ -290,7 +272,7 @@ exports.methods = {
                         previewUrl: info.previewUrl,
                         editorPid: info.editorPid,
                         updatedAt: info.updatedAt,
-                        staleSec: Math.floor(ageMs / 1000),
+                        alive: localStatus.isProcessAlive(info.editorPid),
                         self: info.projectPath === Editor.Project.path,
                     });
                 } catch (e) { /* ignore */ }
@@ -323,36 +305,54 @@ exports.methods = {
             previewPort: portMatch ? parseInt(portMatch[1], 10) : null,
             editorPid: process.pid,
             editorVersion: (Editor.App && Editor.App.version) ? Editor.App.version : '',
+            editorVersionRange: '>=3.8.0 <3.9.0',
             projectPath: Editor.Project.path,
             updatedAt: updatedAt,
             infoFile: INFO_FILE,
             watchers: {
                 refresh: !!_refreshWatcher,
-                infoInterval: !!_infoInterval,
+                registryHeartbeat: !!_registryHeartbeatInterval,
             },
             gitBranch: gitBranch,
             gitHead: gitHead,
             commandLog: _commandLog.slice().reverse(),
-            mcpServer: _mcpServer ? {
-                running: _mcpServer.started,
-                url: 'http://' + _mcpServer.host + ':' + _mcpServer.port + '/mcp',
-                port: _mcpServer.port,
-                toolCount: _mcpServer.toolCount,
-                resourceCount: _mcpServer.resourceCount,
-                stats: _mcpServer.stats,
+            editorBridge: _editorBridge ? {
+                running: _editorBridge.started,
+                url: 'http://' + _editorBridge.host + ':' + _editorBridge.port + '/bridge',
+                port: _editorBridge.port,
+                bridgeApiVersion: _editorBridge.bridgeApiVersion,
+                toolCount: _editorBridge.toolCount,
+                resourceCount: _editorBridge.resourceCount,
+                stats: _editorBridge.stats,
             } : { running: false },
         };
     }
 };
 
-// ── MCP Server ──
+// ── Editor Bridge（仅供全局 cocos-mcp-gateway 调用，不是 MCP Server）──
 
-var _mcpServer = null;
-var MCP_DEFAULT_PORT = 7523;
-var MCP_GATEWAY_API_VERSION = 1;
-var MCP_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26'];
+var _editorBridge = null;
+var BRIDGE_DEFAULT_PORT = 7523;
+var GATEWAY_API_VERSION = 2;
 var REGISTRY_DIR = path.join(require('os').homedir(), '.cocos-mcp', 'editors');
-var SDK_PATH = path.join(__dirname, 'mcp-sdk', 'index.js');
+
+function buildBridgeConfig() {
+    if (!_editorBridge) return { running: false, gatewayManaged: true };
+    return {
+        running: _editorBridge.started,
+        gatewayManaged: true,
+        transport: 'editor-bridge',
+        bridgeApiVersion: _editorBridge.bridgeApiVersion,
+        url: 'http://' + _editorBridge.host + ':' + _editorBridge.port + '/bridge',
+        port: _editorBridge.port,
+        host: _editorBridge.host,
+        toolCount: _editorBridge.toolCount,
+        resourceCount: _editorBridge.resourceCount,
+        stats: _editorBridge.stats,
+        clientEntry: 'cocos-mcp-gateway',
+        note: '这是 Gateway 私有端点，不要直接注册为 MCP Server。',
+    };
+}
 
 /**
  * 计算项目短名（MCP 工具名前缀，需能区分不同项目）。
@@ -370,7 +370,7 @@ function getProjectShortName() {
 }
 
 /**
- * 解析 Cocos 编辑器主进程可执行路径，写进注册文件供 router 的 editor_restart 拉起用。
+ * 解析 Cocos 编辑器主进程可执行路径，写进注册文件供 Gateway 的 editor_restart 拉起用。
  * 取 process.argv[0] / process.execPath（编辑器主进程可执行，跨平台）。
  * 排除 Helper（渲染/GPU 子进程），解析不到返回空串。
  */
@@ -388,7 +388,7 @@ function getEditorExecPath() {
 }
 
 function writeRegistry() {
-    if (!_mcpServer || !_mcpServer.started) return;
+    if (!_editorBridge || !_editorBridge.started) return;
     try {
         if (!fs.existsSync(REGISTRY_DIR)) fs.mkdirSync(REGISTRY_DIR, { recursive: true, mode: 0o700 });
         try { fs.chmodSync(REGISTRY_DIR, 0o700); } catch (e) { /* Windows / restricted FS */ }
@@ -396,16 +396,17 @@ function writeRegistry() {
             pid: process.pid,
             projectPath: Editor.Project.path,
             projectShortName: getProjectShortName(),
-            host: _mcpServer.host,
-            port: _mcpServer.port,
-            url: 'http://' + _mcpServer.host + ':' + _mcpServer.port + '/mcp',
+            host: _editorBridge.host,
+            port: _editorBridge.port,
+            url: 'http://' + _editorBridge.host + ':' + _editorBridge.port + '/bridge',
+            transport: 'editor-bridge',
             editorVersion: (Editor.App && Editor.App.version) ? Editor.App.version : '',
             execPath: getEditorExecPath(),
             extensionVersion: require('./package.json').version,
-            gatewayApiVersion: MCP_GATEWAY_API_VERSION,
-            mcpProtocolVersions: MCP_PROTOCOL_VERSIONS.slice(),
-            authToken: _mcpServer.authToken,
-            startedAt: _mcpServer.stats.startedAt,
+            gatewayApiVersion: GATEWAY_API_VERSION,
+            bridgeApiVersion: _editorBridge.bridgeApiVersion,
+            authToken: _editorBridge.authToken,
+            startedAt: _editorBridge.stats.startedAt,
             updatedAt: new Date().toISOString(),
         };
         var registryFile = path.join(REGISTRY_DIR, process.pid + '.json');
@@ -441,19 +442,17 @@ function findFreePort(startPort) {
     });
 }
 
-async function startMcpServer() {
-    if (_mcpServer && _mcpServer.started) return;
-    var port = await findFreePort(MCP_DEFAULT_PORT);
-    var sdk = require(SDK_PATH);
+async function startEditorBridge() {
+    if (_editorBridge && _editorBridge.started) return;
+    var port = await findFreePort(BRIDGE_DEFAULT_PORT);
     var authToken = require('crypto').randomBytes(32).toString('hex');
 
-    // ── 使用 mcp-sdk ──────────────────────────────────────────────
     var tdef = require('./server/tools');
     var ctx = buildToolCtx();
     var toolDefs = tdef.defineTools(ctx);
     var resourceDefs = tdef.defineResources(ctx);
 
-    // 只计真实的工具调用 / 资源读取，不计 router 每 15s 的 initialize/tools-list 探活——
+    // 只计真实的工具调用 / 资源读取，不计 Gateway 每 15s 的 bridge/describe 探活——
     // 否则计数永远在涨，无法用于判断「业务指令到没到编辑器」。
     // lastRequestAt/lastTool 是判活主信号（曾因 requestCount 初始化后无人自增、恒 0，被当成转发断裂误诊）。
     var stats = { startedAt: new Date().toISOString(), requestCount: 0, lastRequestAt: null, lastTool: null };
@@ -466,13 +465,12 @@ async function startMcpServer() {
         };
     }
 
-    var server = sdk.createServer({
-        name: 'cc-3-8-x-mcp',
+    var bridgeModule = require('./server/editor-bridge');
+    var bridge = bridgeModule.createEditorBridge({
+        name: 'cocos-creator-3-8-x-editor-bridge',
         version: require('./package.json').version,
+        host: '127.0.0.1',
         port: port,
-        protocolVersion: MCP_PROTOCOL_VERSIONS[0],
-        supportedProtocolVersions: MCP_PROTOCOL_VERSIONS,
-        allowedOrigins: [],
         authToken: authToken,
         tools: toolDefs.map(function (t) {
             return {
@@ -493,24 +491,24 @@ async function startMcpServer() {
         }),
     });
 
-    // 启动 HTTP（cc-3-8-x-mcp 只跑 HTTP，不跑 stdio）
-    await server.start('http');
-    _mcpServer = {
+    await bridge.start();
+    _editorBridge = {
         started: true,
-        host: '127.0.0.1',
-        port: port,
+        host: bridge.host,
+        port: bridge.port,
+        bridgeApiVersion: bridge.bridgeApiVersion,
         authToken: authToken,
         toolCount: toolDefs.length,
         resourceCount: resourceDefs.length,
         stats: stats,
-        stop: function () { server.stop(); },
+        stop: function () { return bridge.stop(); },
     };
     writeRegistry();
-    log('MCP server up (SDK) — http://127.0.0.1:' + port + '/mcp  (tools:' + toolDefs.length + ') shortName=' + getProjectShortName());
+    log('Editor Bridge up — http://127.0.0.1:' + bridge.port + '/bridge  (tools:' + toolDefs.length + ') shortName=' + getProjectShortName());
 }
 
 /**
- * 构建 tool/resource 的 ctx（共享给 SDK 和 fallback）
+ * 构建 tool/resource 的 ctx。
  */
 function buildToolCtx() {
     return {
@@ -536,15 +534,13 @@ function buildToolCtx() {
     };
 }
 
-async function stopMcpServer() {
-    if (!_mcpServer) return;
+async function stopEditorBridge() {
+    if (!_editorBridge) return;
     removeRegistry();
-    if (_mcpServer.stop) {
-        _mcpServer.stop();
-    } else {
-        try { await _mcpServer.stop(); } catch (e) { /* ignore */ }
-    }
-    _mcpServer = null;
+    try {
+        if (_editorBridge.stop) await _editorBridge.stop();
+    } catch (e) { /* ignore */ }
+    _editorBridge = null;
 }
 
 // ── .dev/refresh 文件命令协议 ──
@@ -592,7 +588,7 @@ function doRestartSelf(name) {
             })
             .then(function (pkgPath) {
                 return Promise.resolve(Editor.Package.disable(pkgPath))
-                    // 200ms 给 unload 钩子（stopRefreshWatcher / stopMcpServer）跑完
+                    // 200ms 给 unload 钩子（stopRefreshWatcher / stopEditorBridge）跑完
                     .then(function () { return new Promise(function (r) { setTimeout(r, 200); }); })
                     .then(function () { return Editor.Package.enable(pkgPath); });
             })
@@ -669,23 +665,23 @@ exports.load = async function () {
     log('loaded');
     // 启动 .dev/refresh 文件 watcher
     startRefreshWatcher();
-    // 异步拿预览地址，写 dev-reload-info.json，启动定时刷新
+    // 异步拿预览地址；仅实际变化时写 dev-reload-info.json，并启动 Gateway 注册心跳
     getPreviewUrl().then(function(url) {
         if (url) writeDevReloadInfo(url);
-        startInfoInterval();
+        startRegistryHeartbeat();
     }).catch(function(e) {
         console.error('[dev-reload] load: getPreviewUrl failed —', e && (e.stack || e.message) || e);
-        startInfoInterval();
+        startRegistryHeartbeat();
     });
-    // 启动 MCP server（失败打完整栈，不阻断扩展 load）
-    startMcpServer().catch(function(e) {
-        console.error('[cc-mcp] MCP server failed to start:', e && (e.stack || e.message) || e);
+    // 启动 Editor Bridge（失败打完整栈，不阻断扩展 load）
+    startEditorBridge().catch(function(e) {
+        console.error('[cc-mcp] Editor Bridge failed to start:', e && (e.stack || e.message) || e);
     });
 };
 
 exports.unload = async function () {
     stopRefreshWatcher();
-    stopInfoInterval();
-    await stopMcpServer();
+    stopRegistryHeartbeat();
+    await stopEditorBridge();
     log('unloaded');
 };
