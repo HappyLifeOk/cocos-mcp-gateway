@@ -97,7 +97,7 @@ node extensions/cc-3-8-x-mcp/cli/bin/cocos-mcp-cli.js <command>
 | 单字段快捷写入（active / label.text / position.x\|y\|z） | `set <prefab> <nodeName> <field> <value>` |
 | 创建新 prefab（最小 root + UITransform） | `create-prefab <out> [--name X] [--width W] [--height H]` |
 | 创建 spine prefab（root + UITransform + sp.Skeleton） | `create-prefab <out> --add-spine <skel-uuid>`，批量靠 shell `for` 循环喂 .skel.meta 的 uuid |
-| **从 src 提取某子节点为独立 prefab**（含组件 + PrefabInfo + stub 嵌套等所有引用闭包） | `extract-prefab <src> <out> --node <selector> [--name X]`。selector 同 batch 三种（名/`{id:N}`/`{path:"A/B"}`）。新根 `_parent=null`，PrefabInfo.root 指自己、asset 指 idx 0；适合"把 HomeBottom.btnTask 拆成 task BottomEntry.prefab" 这类场景 |
+| **从 src 提取某子节点为独立 prefab**（结构子树 + 拥有的组件、PrefabInfo、stub 嵌套和 override） | `extract-prefab <src> <out> --node <selector> [--name X]`。selector 同 batch 三种（名/`{id:N}`/`{path:"A/B"}`）。新根 `_parent=null`，本地 PrefabInfo 指向新根和 idx 0；引用子树外节点/组件会明确报错，不隐式复制兄弟子树 |
 | **清 prefab data 数组 null 槽位 + 重映射 __id__**（早期手工生成的历史包袱） | `compact-prefab <prefab> [--dry-run]`。Cocos editor 反序列化容错跳过 null，但 build worker 严格 scan 撞 null 崩 `Cannot read properties of undefined (reading '__type__')`。算法同 extract-cmd line 105-132 紧凑 push + remap，但不剔除任何东西。dry-run 输出 dangling 引用警告（指向已删 null 的 `__id__`）。只清顶层 data 数组 null；子节点字段里的 null 引用要靠 GUI 重存或 query+set 单点修复 |
 
 ## 写 ops.json 速记

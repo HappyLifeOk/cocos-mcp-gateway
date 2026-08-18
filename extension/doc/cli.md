@@ -221,13 +221,16 @@ done
 | `--dry-run` | 不写盘，把新 prefab + meta JSON 输出到 stdout |
 
 闭包收集规则（`cli/src/cli/extract-cmd.js`）：
-- 从 srcNode 开始递归走所有字段，遇 `{__id__: N}` 把 N 加入闭包队列
-- 跳过 `_parent`（反向引用会把父链/兄弟拖进闭包，破坏「只提子树」语义）
+- 先沿 `_children` 和嵌套实例的 `mountedChildren` 确定结构子树，再收集子树拥有的组件、PrefabInfo、PrefabInstance 和 override 对象
+- 跳过 `_parent`、`cc.PrefabInfo.root/asset` 与 `cc.PrefabInstance.prefabRootNode` 等父级或资源归属引用，避免回到源 Prefab 根
+- 子树内节点和组件引用正常重映射；引用子树外节点或组件时明确报错，不隐式复制兄弟子树
 - 闭包内元素按原 idx 升序拷贝到新数组（srcNode 永远是 idx 1）
 
 输出语义：
 - 新 root: `_parent = null`，`_name = newName`
-- 新 root 的 PrefabInfo: `root → {__id__: 1}`, `asset → {__id__: 0}`, 清掉 `instance / targetOverrides / nestedPrefabInstanceRoots`（这些字段在源里是相对宿主的，独立 prefab 不需要）
+- 所有本地节点 PrefabInfo: `root → {__id__: 1}`, `asset → {__id__: 0}`
+- 嵌套 Prefab 保留 UUID asset、PrefabInstance、override 和 mounted 对象，并在新 root 的 `nestedPrefabInstanceRoots` 中重建登记
+- 新 root 清掉相对源宿主的 `instance / targetOverrides`；直接提取嵌套 Prefab stub 根当前不支持并会报错
 - meta uuid: 走 `deterministicUUID(extract-prefab:<outPath>:<newName>:uuid)`，**同 src+out+name 每次同 uuid**
 
 例：从 HomeBottom 提取 btnTask 为独立 BottomEntry.prefab
