@@ -305,12 +305,12 @@ function findEditorProcessByProject(projectPath) {
 // 信号：预览端口上的 ESTABLISHED 连接 —— 浏览器开着游戏预览页 / guide-live.html（iframe 嵌
 // 预览）都会保持长连接，是「有人正在调试」最直接的证据。有连接且没传 force 就拒绝。
 
-/** 读 <project>/.dev/dev-reload-info.json 拿预览端口，读不到回落 7456 */
+/** 读 <project>/temp/dev-reload-info.json 拿预览端口，读不到回落 7456 */
 function resolvePreviewPort(projectPath) {
     try {
-        var info = JSON.parse(fs.readFileSync(path.join(projectPath, '.dev', 'dev-reload-info.json'), 'utf-8'));
+        var info = JSON.parse(fs.readFileSync(path.join(projectPath, 'temp', 'dev-reload-info.json'), 'utf-8'));
         if (info && info.previewPort) return Number(info.previewPort);
-    } catch (e) { /* 没装 dev-reload 扩展或文件未生成 */ }
+    } catch (e) { /* 扩展未启用或状态文件未生成 */ }
     return 7456;
 }
 

@@ -6,18 +6,19 @@ var { exec } = require('child_process');
 var localStatus = require('./server/local-status');
 
 var DEV_DIR = '.dev';
+var TEMP_DIR = 'temp';
 
 // 缓存预览地址
 var _previewUrl = '';
 // Gateway 注册心跳 interval handle；不再周期性重写 dev-reload-info.json
 var _registryHeartbeatInterval = null;
-// `.dev/refresh` 命令文件 watcher（唯一保留的 watcher）
+// `temp/refresh` 命令文件 watcher（唯一保留的 watcher）
 var _refreshWatcher = null;
 
 // dev-reload-info.json 输出路径（被 listWorktrees / getStatus / panel 读取，必须保留）
-var INFO_FILE = '.dev/dev-reload-info.json';
+var INFO_FILE = 'temp/dev-reload-info.json';
 // 信号文件：外部脚本写命令到此文件，插件读后执行（每行一条命令，读完清空）
-var REFRESH_FILE = '.dev/refresh';
+var REFRESH_FILE = 'temp/refresh';
 // 自定义按钮配置（用户可在 .dev/cc-mcp-panel.json 或旧名 .dev/dev-reload-panel.json 里维护）
 var PANEL_CONFIG_FILE = '.dev/dev-reload-panel.json';
 
@@ -30,7 +31,7 @@ function pushCommandLog(source, cmd) {
 }
 
 /**
- * 把当前预览状态写入 .dev/dev-reload-info.json。
+ * 把当前预览状态写入 temp/dev-reload-info.json。
  * 外部脚本（playwright/designer）通过此文件反查"本 worktree 对应哪个预览端口"。
  * 只在 previewUrl 已知时写入；previewUrl 为空则跳过，等待首次 getPreviewUrl 成功。
  * @param {string} previewUrl  已知的预览 URL（非空）
@@ -57,9 +58,9 @@ function writeDevReloadInfo(previewUrl) {
         previewPort: previewPort,
     };
     try {
-        var devDir = path.join(Editor.Project.path, DEV_DIR);
-        if (!fs.existsSync(devDir)) {
-            fs.mkdirSync(devDir, { recursive: true });
+        var tempDir = path.join(Editor.Project.path, TEMP_DIR);
+        if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
         }
         var infoPath = path.join(Editor.Project.path, INFO_FILE);
         if (fs.existsSync(infoPath)) {
@@ -212,11 +213,11 @@ exports.methods = {
         await doReloadScene();
         return true;
     },
-    /** Panel 使用：清理 .dev 临时产物（保留 dev-reload-info.json / dev-reload-panel.json / cc-mcp-panel.json） */
+    /** Panel 使用：清理 .dev 临时产物（保留 dev-reload-panel.json / cc-mcp-panel.json） */
     cleanDevDir() {
         pushCommandLog('panel', 'clean-dev');
         var devDir = path.join(Editor.Project.path, DEV_DIR);
-        var keep = { 'dev-reload-info.json': 1, 'dev-reload-panel.json': 1, 'cc-mcp-panel.json': 1 };
+        var keep = { 'dev-reload-panel.json': 1, 'cc-mcp-panel.json': 1 };
         var removed = [];
         try {
             var entries = fs.readdirSync(devDir);
@@ -234,14 +235,14 @@ exports.methods = {
     /** Panel 使用：扫同机其他 worktree 的 dev-reload-info.json */
     listWorktrees() {
         var results = [];
-        // 扫当前项目同级目录里其它含 .dev/dev-reload-info.json 的项目实例（不假设目录命名）
+        // 扫当前项目同级目录里其它含 temp/dev-reload-info.json 的项目实例（不假设目录命名）
         var cur = Editor.Project.path;
         var roots = [];
         try {
             var siblingDir = path.dirname(cur);
             fs.readdirSync(siblingDir).forEach(function (name) {
                 var p = path.join(siblingDir, name);
-                if (p !== cur && fs.existsSync(path.join(p, '.dev', 'dev-reload-info.json'))) {
+                if (p !== cur && fs.existsSync(path.join(p, INFO_FILE))) {
                     roots.push(p);
                 }
             });
@@ -259,7 +260,7 @@ exports.methods = {
 
         roots.forEach(function (root) {
             var candidates = [
-                path.join(root, '.dev', 'dev-reload-info.json'),
+                path.join(root, INFO_FILE),
             ];
             candidates.forEach(function (infoPath) {
                 if (!fs.existsSync(infoPath)) return;
@@ -543,7 +544,7 @@ async function stopEditorBridge() {
     _editorBridge = null;
 }
 
-// ── .dev/refresh 文件命令协议 ──
+// ── temp/refresh 文件命令协议 ──
 
 /**
  * 打开 prefab 到编辑器场景视图（等价于双击 prefab）。
@@ -616,7 +617,7 @@ async function handleRefreshCommand(cmd) {
     log('refresh: unknown command — ' + cmd + '（仅支持 restart-package [name]）');
 }
 
-/** 启动 .dev/refresh 文件 watcher（写入命令 → 读取 → 执行 → 清空） */
+/** 启动 temp/refresh 文件 watcher（写入命令 → 读取 → 执行 → 清空） */
 function startRefreshWatcher() {
     if (_refreshWatcher) return;
     var filePath = path.join(Editor.Project.path, REFRESH_FILE);
@@ -649,7 +650,7 @@ function startRefreshWatcher() {
     }
 }
 
-/** 停止 .dev/refresh 文件 watcher */
+/** 停止 temp/refresh 文件 watcher */
 function stopRefreshWatcher() {
     if (_refreshWatcher) { try { _refreshWatcher.close(); } catch (e) { /* ignore */ } _refreshWatcher = null; }
 }
@@ -657,13 +658,13 @@ function stopRefreshWatcher() {
 // ── 插件生命周期 ──
 
 exports.load = async function () {
-    // 确保 .dev 目录存在
-    var devDir = path.join(Editor.Project.path, DEV_DIR);
-    if (!fs.existsSync(devDir)) {
-        fs.mkdirSync(devDir, { recursive: true });
+    // 确保运行时文件所在的 temp 目录存在；.dev 仅在使用用户配置时创建
+    var tempDir = path.join(Editor.Project.path, TEMP_DIR);
+    if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
     }
     log('loaded');
-    // 启动 .dev/refresh 文件 watcher
+    // 启动 temp/refresh 文件 watcher
     startRefreshWatcher();
     // 异步拿预览地址；仅实际变化时写 dev-reload-info.json，并启动 Gateway 注册心跳
     getPreviewUrl().then(function(url) {

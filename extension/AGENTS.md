@@ -11,7 +11,7 @@
 | 全局 `cocos-mcp-gateway` 注入的项目 tool | `scene` / `asset-db` / `preview` / `local` 域操作 |
 | `cocos-mcp-cli` offline 命令 | `.prefab` / `.anim` 文件查询和修改 |
 | Playwright / Chrome | 浏览器里真实游戏页面的交互验证 |
-| `.dev/refresh` 的 `restart-package` | 重启本扩展代码 |
+| `temp/refresh` 的 `restart-package` | 重启本扩展代码 |
 
 项目扩展的 `/bridge` 是 Gateway 私有协议，agent 和其他 MCP 客户端不得直接调用、不得直接读取或复制注册记录中的 token。其它入口不作为本插件使用路径。
 
@@ -114,9 +114,9 @@ offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefa
 |---|---|
 | 单个资源 | `asset_reimport` 指定 `db://` 路径 |
 | 多个资源或不确定依赖 | `asset_refresh` 后 `preview_refresh_and_reload` |
-| 扩展代码 | `.dev/refresh` 写 `restart-package` |
+| 扩展代码 | `temp/refresh` 写 `restart-package` |
 
-`.dev/refresh` 只承载 `restart-package`。
+`temp/refresh` 只承载 `restart-package`。
 
 ## CLI 与 MCP 分工
 
@@ -153,6 +153,6 @@ browser_take_screenshot
 
 1. 没有匹配 `projectPath` 的注册文件：确认 Cocos 编辑器已打开当前项目，并且扩展已启用。
 2. `pid` 不存活：忽略该注册文件，等编辑器重新注册。
-3. Editor Bridge 不通：用 `.dev/refresh` 的 `restart-package` 重启扩展；仍不通就重启编辑器。
+3. Editor Bridge 不通：用 `temp/refresh` 的 `restart-package` 重启扩展；仍不通就重启编辑器。
 4. Gateway tool 返回的预览 URL 为空：确认编辑器预览已启动。
 5. 工具行为异常或文档与实际不一致：反馈插件问题，由用户决定是否修插件本身。

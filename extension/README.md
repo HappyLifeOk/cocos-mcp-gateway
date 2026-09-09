@@ -249,14 +249,16 @@ Codex 使用全局 `cocos-mcp` plugin 的 `.mcp.json` 启动同一个 stdio Gate
 
 ---
 
-## `.dev/refresh` 信号协议
+运行时状态文件位于 `<project>/temp/dev-reload-info.json`，记录编辑器进程与预览地址；状态文件和命令文件都属于本地临时产物，无需提交 Git。面板自定义配置仍保留在 `.dev/`。
 
-外部往 `<project>/.dev/refresh` 文件写一行命令，编辑器扩展的 watcher 读到后执行并清空文件。fire-and-forget，无返回值。
+## `temp/refresh` 信号协议
+
+外部往 `<project>/temp/refresh` 文件写一行命令，编辑器扩展的 watcher 读到后执行并清空文件。fire-and-forget，无返回值。
 
 协议精简：**只支持 `restart-package`**——禁用→启用本扩展，让 `main.js` / `tools.js` / `server/*` 的代码改动生效。资源刷新 / 场景重载 / 预览刷新 / 截图等都走 MCP tool（`preview_refresh_and_reload` / `asset_reimport` / `preview_screenshot` 等）或面板按钮。
 
 ```bash
-echo "restart-package" > .dev/refresh
+echo "restart-package" > temp/refresh
 ```
 
 面板上的「重启 Editor Bridge」按钮只重启 Bridge 实例，Node require 缓存不动，**改不到 main.js 的代码改动**。`restart-package` 走 `Editor.Package.disable + enable`，整个扩展沙箱重建，所有 JS 重新 require。注意命令是 fire-and-forget，不返回结果；扩展重启过程中 Gateway 路由会短暂中断（≈1-2s），随后自动重新发现。
