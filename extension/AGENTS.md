@@ -32,7 +32,7 @@
 3. 校验 `pid` 仍存活。
 4. 多个匹配时取 `updatedAt` 最新的记录。
 5. 只接受 `transport=editor-bridge`、`gatewayApiVersion>=2`、`bridgeApiVersion=1` 的记录。
-6. 后续操作只调用 Gateway 暴露的 `<project>__<tool>`，不直接请求记录中的 `/bridge` URL。
+6. 后续优先用 Gateway 固定入口 `gateway_get_project_tools(projectPath)` 读取参数，再用 `gateway_call_project_tool(projectPath, toolName, arguments)` 调用；同项目多个实例时指定 `pid`。已注入且与项目匹配的 `<project>__<tool>` 也可使用，不直接请求 `/bridge` URL。
 7. 缺失或格式不正确的 `authToken` 视为无效注册记录；token 不写日志、不贴到回复里。
 
 快速确认脚本：
@@ -76,7 +76,15 @@ PY
 
 ## Gateway Tool
 
-使用 Gateway 暴露的带项目名前缀 tool：
+优先使用 Gateway 的固定项目入口；会话启动后新增或切换编辑器时，无需等待客户端更新项目工具前缀：
+
+```text
+gateway_list_editors()
+gateway_get_project_tools(projectPath="/真实项目绝对路径")
+gateway_call_project_tool(projectPath="/真实项目绝对路径", toolName="local_get_status", arguments={})
+```
+
+以下带项目名前缀的工具仍可使用，但必须确认前缀与项目匹配：
 
 ```text
 forest__preview_query_url
@@ -84,7 +92,7 @@ forest__asset_reimport
 forest__preview_refresh_and_reload
 ```
 
-如果当前 agent 没注入这些 tool，先修复或注册全局 `cocos-mcp-gateway`。禁止把项目 `/bridge` 当成 HTTP MCP fallback。
+如果只有旧前缀，使用固定项目入口。如果固定入口也不存在，先重新连接或升级全局 `cocos-mcp-gateway`。禁止把项目 `/bridge` 当成 HTTP MCP fallback。
 
 ## 预览 URL
 

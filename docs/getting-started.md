@@ -64,7 +64,9 @@ codex plugin add cocos-mcp@happylifeok-cocos
 - `cocos` MCP Server。
 - `cocos-mcp-control` Skill。
 
-安装或升级后请新建一个 Codex 任务，让新任务重新加载 Skill 和 MCP 工具。
+安装或升级后请重新连接 Cocos MCP，或新建一个任务加载新版 Skill 和 MCP 工具。
+新版 Gateway 始终提供 `gateway_get_project_tools` 与 `gateway_call_project_tool`：先按项目绝对路径查询工具定义，再按同一路径调用。
+固定入口加载后，打开或切换 Creator 项目不再要求客户端动态刷新项目工具前缀；已有连接若连固定入口都没有，仍需重连一次。
 
 ### Claude Code
 

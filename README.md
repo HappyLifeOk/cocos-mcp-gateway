@@ -6,6 +6,17 @@ Gateway。它是系统中唯一的 MCP Server，负责多项目发现、工具�
 
 第一次使用请先阅读：[安装与使用指南](docs/getting-started.md)。
 
+## 项目工具列表更新
+
+从 0.3.2 开始，编辑器操作优先走两个固定入口：
+
+1. `gateway_get_project_tools`：传入项目真实绝对 `projectPath`，获取该项目最新工具名、参数和 annotations。
+2. `gateway_call_project_tool`：传入同一 `projectPath`、原始 `toolName` 和 `arguments` 执行；同项目多实例时指定 `pid`。
+
+固定入口在编辑器尚未启动时也会出现在工具列表中。后续打开或切换项目，即使客户端保留会话启动时的工具快照，也能继续调用目标项目，不依赖前缀动态更新。
+原有 `<shortName>__*` 工具保留；工具改名、参数、说明或 annotations 变化时都会发出 `notifications/tools/list_changed`。
+升级已有插件后需重新连接 MCP，或启动加载新版插件的新会话；无需重启项目 Creator。
+
 每个 Cocos Creator 3.8.x 项目只安装轻量 `cc-3-8-x-mcp`。扩展通过私有本机
 `/bridge` 把 `Editor.Message` 能力交给 Gateway，不再运行项目级 MCP Server，
 也不再依赖 `universal-mcp-sdk`。

@@ -25,6 +25,7 @@
 var fs = require('fs');
 var path = require('path');
 var os = require('os');
+var crypto = require('crypto');
 
 var offlineTools = require('./src/offline-tools.js');
 var editorControl = require('./src/editor-control.js');
@@ -34,11 +35,11 @@ var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
 var STALE_MS = 120 * 1000;  // 2 分钟没心跳视为死
 var DISCOVERY_INTERVAL_MS = 15 * 1000;
 var PROTOCOL_VERSION = '2025-06-18';
-var GATEWAY_INFO = { name: 'cocos-mcp-gateway', version: '0.3.1' };
+var GATEWAY_INFO = { name: 'cocos-mcp-gateway', version: '0.3.2' };
 var GATEWAY_INSTRUCTIONS = [
     '先识别项目再调用 Cocos 工具：调用 gateway_list_editors，并用规范化后的真实绝对 projectPath 精确匹配当前工作区；不得只凭 shortName、工具前缀或项目名猜实例。项目工具只使用 transport=editor-bridge、gatewayApiVersion>=2、bridgeApiVersion=1 的实例。项目 /bridge 是 Gateway 私有协议：不得直接调用或注册为 MCP Server，不得读取、输出或传播注册记录中的 authToken。',
     '查询或修改 .prefab/.anim 时优先使用全局 offline 工具 prefab_query、prefab_edit、prefab_batch，filePath 必须是绝对路径。修改前先查询结构；批量修改先 dry-run；失败时停止，不得绕过 CLI 直接编辑序列化 JSON。',
-    '场景运行态、AssetDB、预览和编辑器状态使用已绑定实例的 <shortName>__* 工具。修改资源后调用 asset_reimport；多资源或依赖不确定时调用 asset_refresh，再按项目约定调用 preview_refresh_and_reload。',
+    '场景运行态、AssetDB、预览和编辑器状态优先使用固定入口 gateway_get_project_tools(projectPath) 查询参数，再用 gateway_call_project_tool(projectPath, toolName, arguments) 调用。projectPath 必须是已核对的真实绝对路径；toolName 是未加前缀的原始工具名。固定入口在没有编辑器时也存在，不依赖客户端刷新项目工具列表。已注入且匹配项目的 <shortName>__* 工具仍可使用。修改资源后调用 asset_reimport；多资源或依赖不确定时调用 asset_refresh，再按项目约定调用 preview_refresh_and_reload。',
     '启动、等待、重启或关闭编辑器时必须显式确认目标绝对 projectPath。仅对 Cocos Creator >=3.8.0 <3.9.0 使用 cc-3-8-x-mcp；缺少扩展时只有在用户授权后才能安装。存在活跃调试连接时不得用 force 绕过保护。',
 ].join('\n');
 
@@ -59,6 +60,7 @@ function logErr() {
 
 /** @type {Map<string, {shortName, url, pid, tools: Array, lastProbed: number}>} */
 var editors = new Map();
+var discoveryPromise = null;
 
 function scanRegistry() {
     var entries = [];
@@ -120,6 +122,13 @@ function sanitizeShortName(name) {
 }
 
 async function discover() {
+    if (discoveryPromise) return discoveryPromise;
+    discoveryPromise = discoverEditors();
+    try { return await discoveryPromise; }
+    finally { discoveryPromise = null; }
+}
+
+async function discoverEditors() {
     var entries = scanRegistry();
     var seen = new Set();
     var beforeSig = toolListSignature();   // 改动前的工具签名，末尾比对决定是否通知 claude
@@ -175,14 +184,17 @@ async function discover() {
     }
 }
 
-/** 工具列表签名：editors 的 shortName:工具数 排序拼接。变化即代表暴露给 claude 的聚合工具列表变了。 */
+/** 名称、参数、说明或 annotations 改变都必须通知客户端；工具数量不能代表完整清单。 */
 function toolListSignature() {
-    var parts = [];
-    for (var ed of editors.values()) {
-        parts.push(ed.shortName + ':' + ed.tools.length);
+    function canonical(value) {
+        if (Array.isArray(value)) return value.map(canonical);
+        if (!value || typeof value !== 'object') return value;
+        var result = {};
+        Object.keys(value).sort().forEach(function (key) { result[key] = canonical(value[key]); });
+        return result;
     }
-    parts.sort();
-    return parts.join('|');
+    var tools = buildAggregatedToolList().slice().sort(function (a, b) { return a.name.localeCompare(b.name); });
+    return crypto.createHash('sha256').update(JSON.stringify(canonical(tools))).digest('hex');
 }
 
 /** 标记 claude 已完成 MCP initialize 握手——之前发 list_changed 没意义（client 尚未就绪）。 */
@@ -248,6 +260,7 @@ function buildAggregatedToolList() {
                 name: ed.shortName + '__' + t.name,
                 description: '[' + ed.shortName + '] ' + (t.description || ''),
                 inputSchema: t.inputSchema || { type: 'object', properties: {} },
+                ...(t.annotations ? { annotations: t.annotations } : {}),
             });
         });
     }
@@ -256,6 +269,36 @@ function buildAggregatedToolList() {
         name: 'gateway_list_editors',
         description: '列出当前 Gateway 发现的所有活跃 Cocos 编辑器（实例、Bridge 版本、tool 数；不暴露 token）',
         inputSchema: { type: 'object', properties: {} },
+    });
+    out.push({
+        name: 'gateway_get_project_tools',
+        description: '按真实绝对 projectPath 查询当前编辑器的工具名称、参数和 annotations。即使会话中的项目工具前缀过期或编辑器在会话启动后才打开，也可使用此固定入口。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                projectPath: { type: 'string', description: '已核对的 Cocos 项目真实绝对路径' },
+                pid: { type: 'integer', description: '同一项目有多个活跃实例时必须指定编辑器 PID' },
+            },
+            required: ['projectPath'],
+            additionalProperties: false,
+        },
+        annotations: { readOnlyHint: true },
+    });
+    out.push({
+        name: 'gateway_call_project_tool',
+        description: '通过固定入口调用已绑定项目的一个 Editor Bridge 工具。先用 gateway_get_project_tools 查询原始工具名及参数，再传入 projectPath、toolName 和 arguments。工具可能读写资源或改变编辑器状态，遵循所选工具的说明和授权范围；不会自动转发到其他项目。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                projectPath: { type: 'string', description: '已核对的 Cocos 项目真实绝对路径' },
+                pid: { type: 'integer', description: '同一项目有多个活跃实例时必须指定编辑器 PID' },
+                toolName: { type: 'string', description: 'gateway_get_project_tools 返回的原始名称，不加项目前缀，例如 local_get_status' },
+                arguments: { type: 'object', description: '严格按所选工具 inputSchema 提供的参数' },
+            },
+            required: ['projectPath', 'toolName', 'arguments'],
+            additionalProperties: false,
+        },
+        annotations: { readOnlyHint: false },
     });
     // offline prefab tools（不需要编辑器运行）
     offlineTools.OFFLINE_TOOLS.forEach(function (t) { out.push(t); });
@@ -304,6 +347,21 @@ function findEditorByPrefixedTool(prefixedName) {
         }
     }
     return null;
+}
+
+function findEditorByProject(args) {
+    if (typeof args.projectPath !== 'string' || !path.isAbsolute(args.projectPath)) throw new Error('projectPath 必须是项目真实绝对路径');
+    var wanted = fs.realpathSync(args.projectPath);
+    if (args.pid !== undefined && (!Number.isInteger(args.pid) || args.pid <= 0)) throw new Error('pid 必须是正整数');
+    var matches = [];
+    for (var ed of editors.values()) {
+        var actual;
+        try { actual = fs.realpathSync(ed.projectPath); } catch (_) { continue; }
+        if (actual === wanted && (args.pid === undefined || Number(ed.pid) === args.pid)) matches.push(ed);
+    }
+    if (!matches.length) throw new Error('没有匹配 projectPath 的活跃编辑器：' + wanted);
+    if (matches.length !== 1) throw new Error('同一项目存在多个活跃编辑器，请指定 pid：' + matches.map(function (ed) { return ed.pid; }).join(', '));
+    return matches[0];
 }
 
 // ── stdio JSON-RPC ──
@@ -387,6 +445,22 @@ async function handleMessage(msg) {
 }
 
 async function handleToolCall(name, args) {
+    if (name === 'gateway_get_project_tools' || name === 'gateway_call_project_tool') {
+        await discover();
+        var target = findEditorByProject(args);
+        if (name === 'gateway_get_project_tools') {
+            return { content: [{ type: 'text', text: JSON.stringify({
+                projectPath: target.projectPath, shortName: target.shortName, pid: target.pid,
+                transport: target.transport, gatewayApiVersion: target.gatewayApiVersion, bridgeApiVersion: target.bridgeApiVersion,
+                tools: target.tools,
+            }) }] };
+        }
+        if (typeof args.toolName !== 'string' || !target.tools.some(function (tool) { return tool.name === args.toolName; })) {
+            throw new Error('该项目未提供工具：' + String(args.toolName));
+        }
+        if (!args.arguments || typeof args.arguments !== 'object' || Array.isArray(args.arguments)) throw new Error('arguments 必须是对象');
+        return forwardEditorTool(target, args.toolName, args.arguments);
+    }
     // Router 自身的 meta tool
     if (name === 'gateway_list_editors') {
         await discover();
@@ -426,13 +500,17 @@ async function handleToolCall(name, args) {
         return { content: [{ type: 'text', text: 'unknown tool: ' + name + '\n可用编辑器: ' + Array.from(editors.values()).map(function(e){return e.shortName;}).join(', ') }], isError: true };
     }
 
+    return forwardEditorTool(hit.editor, hit.originalName, args);
+}
+
+async function forwardEditorTool(editor, toolName, args) {
     try {
-        var forward = await rpc.bridgeJsonRpc(hit.editor.url, {
+        var forward = await rpc.bridgeJsonRpc(editor.url, {
             jsonrpc: '2.0', id: Date.now(), method: 'bridge/invoke',
-            params: { name: hit.originalName, arguments: args },
+            params: { name: toolName, arguments: args },
         }, {
-            authToken: hit.editor.authToken,
-            timeoutMs: rpc.toolTimeoutMs(hit.originalName),
+            authToken: editor.authToken,
+            timeoutMs: rpc.toolTimeoutMs(toolName),
         });
         if (forward.error) {
             return { content: [{ type: 'text', text: 'editor error: ' + forward.error.message }], isError: true };
@@ -440,7 +518,7 @@ async function handleToolCall(name, args) {
         return forward.result;
     } catch (e) {
         // 编辑器可能关闭了，移除缓存
-        editors.delete(hit.editor.url);
+        if (editors.delete(editor.url)) notifyToolsChanged();
         return { content: [{ type: 'text', text: 'forward failed: ' + e.message }], isError: true };
     }
 }
@@ -469,7 +547,7 @@ async function handleResourceRead(uri) {
         }
         return forward.result;
     } catch (e) {
-        editors.delete(ed.url);
+        if (editors.delete(ed.url)) notifyToolsChanged();
         return { contents: [{ type: 'text', text: 'forward failed: ' + e.message, mimeType: 'text/plain' }] };
     }
 }

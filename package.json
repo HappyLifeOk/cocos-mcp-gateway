@@ -1,6 +1,6 @@
 {
   "name": "cocos-mcp-gateway",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Global MCP Gateway, Editor Bridge installer, and offline Prefab CLI for Cocos Creator projects.",
   "license": "Apache-2.0",
   "author": "付饶",

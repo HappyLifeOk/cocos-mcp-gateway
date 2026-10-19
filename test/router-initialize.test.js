@@ -65,7 +65,7 @@ test('initialize 返回跨平台 Gateway instructions', async () => {
   const response = await initializeGateway();
   assert.equal(response.id, 1);
   assert.equal(response.result.serverInfo.name, 'cocos-mcp-gateway');
-  assert.equal(response.result.serverInfo.version, '0.3.1');
+  assert.equal(response.result.serverInfo.version, require('../package.json').version);
   assert.equal(response.result.protocolVersion, '2025-06-18');
   const first512 = response.result.instructions.slice(0, 512);
   assert.match(first512, /gateway_list_editors/);
