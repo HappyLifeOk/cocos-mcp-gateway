@@ -5,9 +5,10 @@
 //   cocos-mcp-cli extract-prefab <src-prefab> <out-prefab>
 //     --node <selector> [--name <new-name>] [--dry-run]
 //
-// 把 src-prefab 中某个子节点连同其整棵子树（含组件 / PrefabInfo /
-// 嵌套 PrefabInstance / propertyOverrides / TargetInfo / mountedComponents
-// 等所有 __id__ 引用闭包）提取出来，构造一个独立的新 prefab + .meta。
+// 把 src-prefab 中某个子节点连同其整棵结构子树（含拥有的组件 /
+// PrefabInfo / 嵌套 PrefabInstance / propertyOverrides / TargetInfo /
+// mountedComponents 等）提取出来，构造一个独立的新 prefab + .meta。
+// 引用子树外节点或组件时明确失败，不把兄弟子树隐式拖入输出。
 //
 // 跟 batch op clone-node 的区别：
 //   - clone-node 在同 prefab 内复制 + 挂到 parent
@@ -88,19 +89,15 @@ function cmdExtractPrefab(argv) {
   const { elements } = prefabData;
   const { nodeId: srcNodeId } = resolveNode(prefabData, nodeSelector, 'extract-prefab');
 
-  // 2) BFS 闭包收集：从 srcNodeId 出发，把所有递归引用的 __id__ 拉进来
-  const collected = new Set();
-  const queue = [srcNodeId];
-  while (queue.length > 0) {
-    const idx = queue.shift();
-    if (collected.has(idx)) continue;
-    collected.add(idx);
-    const refs = [];
-    _walkCollect(elements[idx], refs);
-    for (const r of refs) {
-      if (!collected.has(r)) queue.push(r);
-    }
+  // 2) 先确定结构子树，再补齐子树拥有的序列化依赖。
+  // PrefabInfo.root/asset 是资源归属反向引用，不能用于定义提取边界。
+  const structuralNodeIds = _collectStructuralNodeIds(elements, srcNodeId);
+  const prefabInfoOwners = _collectPrefabInfoOwners(elements, structuralNodeIds);
+  const rootPrefabInfo = elements[elements[srcNodeId]._prefab && elements[srcNodeId]._prefab.__id__];
+  if (rootPrefabInfo && rootPrefabInfo.instance && typeof rootPrefabInfo.instance.__id__ === 'number') {
+    throw new Error('extract-prefab: 目标根节点是嵌套 Prefab stub，当前不支持直接提取');
   }
+  const collected = _collectOwnedClosure(elements, structuralNodeIds);
 
   // 3) 重新编号：new[0] = 新 cc.Prefab 头部，new[1] = srcNode（root），其余按原 idx 升序
   const oldToNew = new Map();
@@ -136,16 +133,38 @@ function cmdExtractPrefab(argv) {
   newRoot._parent = null;
   newRoot._name = newName;
 
-  // 6) 修正根节点 _prefab（PrefabInfo）：root 指向新根 idx 1，asset 指向 idx 0
-  if (newRoot._prefab && typeof newRoot._prefab.__id__ === 'number') {
-    const rootPInfo = newData[newRoot._prefab.__id__];
-    if (rootPInfo && rootPInfo.__type__ === 'cc.PrefabInfo') {
-      rootPInfo.root = { __id__: 1 };
-      rootPInfo.asset = { __id__: 0 };
-      // 这些字段在源 prefab 是相对宿主 prefab 的，新 prefab 是独立的，清掉
-      if ('instance' in rootPInfo) rootPInfo.instance = null;
-      if ('targetOverrides' in rootPInfo) rootPInfo.targetOverrides = null;
-      if ('nestedPrefabInstanceRoots' in rootPInfo) rootPInfo.nestedPrefabInstanceRoots = null;
+  // 6) PrefabInfo.root/asset 没有参与闭包收集，需要按新资源所有权统一重写。
+  for (const [prefabInfoId, owner] of prefabInfoOwners) {
+    const newPrefabInfoId = oldToNew.get(prefabInfoId);
+    const newPrefabInfo = newData[newPrefabInfoId];
+    if (!newPrefabInfo || newPrefabInfo.__type__ !== 'cc.PrefabInfo') continue;
+
+    if (owner.localAsset) {
+      newPrefabInfo.root = { __id__: 1 };
+      newPrefabInfo.asset = { __id__: 0 };
+    } else {
+      const newNestedRootId = oldToNew.get(owner.sourceRootId);
+      if (newNestedRootId === undefined) {
+        throw new Error(
+          `extract-prefab: 嵌套 PrefabInfo [${prefabInfoId}] 的 root [${owner.sourceRootId}] 不在目标子树内`
+        );
+      }
+      newPrefabInfo.root = { __id__: newNestedRootId };
+    }
+  }
+
+  const newRootPrefabInfo = newData[newRoot._prefab && newRoot._prefab.__id__];
+  if (newRootPrefabInfo && newRootPrefabInfo.__type__ === 'cc.PrefabInfo') {
+    newRootPrefabInfo.instance = null;
+    newRootPrefabInfo.targetOverrides = null;
+    newRootPrefabInfo.nestedPrefabInstanceRoots = [...structuralNodeIds]
+      .filter(nodeId => _isNestedPrefabStub(elements, nodeId))
+      .map(nodeId => ({ __id__: oldToNew.get(nodeId) }));
+  }
+
+  for (let i = 1; i < newData.length; i++) {
+    if (newData[i] && newData[i].__type__ === 'cc.PrefabInstance') {
+      newData[i].prefabRootNode = { __id__: 1 };
     }
   }
 
@@ -184,8 +203,115 @@ function cmdExtractPrefab(argv) {
 
 // ── internals ────────────────────────────────────────────
 
-// 跳过的字段：_parent 反向引用会把父链/兄弟子树拖进闭包，破坏"只提取子树"的语义
+// 这些字段表达父级或资源归属，不是当前对象拥有的依赖。
 const SKIP_KEYS = new Set(['_parent']);
+const PREFAB_INFO_SKIP_KEYS = new Set(['root', 'asset']);
+const PREFAB_INSTANCE_SKIP_KEYS = new Set(['prefabRootNode']);
+
+function _collectStructuralNodeIds(elements, rootNodeId) {
+  const nodeIds = new Set();
+  const queue = [rootNodeId];
+
+  while (queue.length > 0) {
+    const nodeId = queue.shift();
+    if (nodeIds.has(nodeId)) continue;
+    const node = elements[nodeId];
+    if (!node || node.__type__ !== 'cc.Node') {
+      throw new Error(`extract-prefab: 结构子树引用 [${nodeId}] 不是有效 cc.Node`);
+    }
+    nodeIds.add(nodeId);
+
+    for (const childRef of node._children || []) {
+      if (childRef && typeof childRef.__id__ === 'number') queue.push(childRef.__id__);
+    }
+
+    const prefabInfo = elements[node._prefab && node._prefab.__id__];
+    const instance = elements[prefabInfo && prefabInfo.instance && prefabInfo.instance.__id__];
+    for (const mountedRef of instance && instance.mountedChildren || []) {
+      if (mountedRef && typeof mountedRef.__id__ === 'number') queue.push(mountedRef.__id__);
+    }
+  }
+
+  return nodeIds;
+}
+
+function _collectPrefabInfoOwners(elements, structuralNodeIds) {
+  const owners = new Map();
+  for (const nodeId of structuralNodeIds) {
+    const node = elements[nodeId];
+    const prefabInfoId = node._prefab && node._prefab.__id__;
+    const prefabInfo = elements[prefabInfoId];
+    if (typeof prefabInfoId !== 'number' || !prefabInfo || prefabInfo.__type__ !== 'cc.PrefabInfo') {
+      throw new Error(`extract-prefab: 节点 [${nodeId}] 缺少有效 cc.PrefabInfo`);
+    }
+    owners.set(prefabInfoId, {
+      localAsset: !!(prefabInfo.asset && prefabInfo.asset.__id__ === 0),
+      sourceRootId: prefabInfo.root && prefabInfo.root.__id__,
+    });
+  }
+  return owners;
+}
+
+function _collectOwnedClosure(elements, structuralNodeIds) {
+  const collected = new Set(structuralNodeIds);
+  const queue = [...structuralNodeIds];
+
+  while (queue.length > 0) {
+    const idx = queue.shift();
+    const element = elements[idx];
+    if (!element || typeof element !== 'object') {
+      throw new Error(`extract-prefab: __id__ [${idx}] 指向无效对象`);
+    }
+
+    const refs = [];
+    _walkElementRefs(element, refs);
+    for (const refId of refs) {
+      const referenced = elements[refId];
+      if (!referenced || typeof referenced !== 'object') {
+        throw new Error(`extract-prefab: 对象 [${idx}] 引用了无效 __id__ [${refId}]`);
+      }
+      if (referenced.__type__ === 'cc.Node' && !structuralNodeIds.has(refId)) {
+        throw new Error(`extract-prefab: 对象 [${idx}] 引用了目标子树外节点 [${refId}]`);
+      }
+      const ownerNodeId = _getComponentOwnerNodeId(referenced);
+      if (ownerNodeId !== null && !structuralNodeIds.has(ownerNodeId)) {
+        throw new Error(
+          `extract-prefab: 对象 [${idx}] 引用了目标子树外组件 [${refId}]，其节点为 [${ownerNodeId}]`
+        );
+      }
+      if (!collected.has(refId)) {
+        collected.add(refId);
+        queue.push(refId);
+      }
+    }
+  }
+
+  return collected;
+}
+
+function _walkElementRefs(element, out) {
+  let extraSkipKeys = null;
+  if (element.__type__ === 'cc.PrefabInfo') extraSkipKeys = PREFAB_INFO_SKIP_KEYS;
+  if (element.__type__ === 'cc.PrefabInstance') extraSkipKeys = PREFAB_INSTANCE_SKIP_KEYS;
+
+  for (const key of Object.keys(element)) {
+    if (SKIP_KEYS.has(key) || extraSkipKeys && extraSkipKeys.has(key)) continue;
+    _walkCollect(element[key], out);
+  }
+}
+
+function _getComponentOwnerNodeId(element) {
+  if (!element || element.__type__ === 'cc.Node') return null;
+  const nodeRef = element.node || element._node;
+  return nodeRef && typeof nodeRef.__id__ === 'number' ? nodeRef.__id__ : null;
+}
+
+function _isNestedPrefabStub(elements, nodeId) {
+  const node = elements[nodeId];
+  const prefabInfo = elements[node && node._prefab && node._prefab.__id__];
+  const instanceId = prefabInfo && prefabInfo.instance && prefabInfo.instance.__id__;
+  return typeof instanceId === 'number' && !!elements[instanceId];
+}
 
 function _walkCollect(obj, out) {
   if (obj === null || obj === undefined) return;
