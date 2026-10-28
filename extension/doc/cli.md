@@ -487,6 +487,8 @@ stub 节点（嵌套 prefab 实例）在 prefab JSON 里 `_name = ""`（空字�
 
 主 prefab stub → 第一层嵌套内的 stub `B` → 第二层嵌套内的 `C` 节点上的 `cc.Label`。每跨一层 PrefabInstance 边界 push 一个 fileId 到 localID 链。1 层时仍可写字符串 `"B"`，向后兼容。
 
+路径可以混合普通子节点与多层嵌套 Prefab。节点名称按 Creator 的显示名解析（`_name` 的实例覆盖优先），跨层引用使用 `cc.PrefabInstance.fileId`，不能用该代理节点的 `cc.PrefabInfo.fileId`。例如 `refSubNode: ["wrapper", "title", "title"]` 可以穿过普通 wrapper，再进入 title 的嵌套实例。路径或实例 ID 无效时，整个 batch 保持原文件不变。
+
 ### 7.5 改 stub 内部某组件的字段
 
 ```json
